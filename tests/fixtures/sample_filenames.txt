@@ -1,0 +1,31 @@
+# Sample filenames for testing
+# Format: filename | expected_title | is_tv_show | season | episode | year
+
+# TV Shows - Dot separators
+The.Pitt.S01E10.1080p.WEB.h264-ETHEL[EZTVx.to].mkv | The Pitt | True | 1 | 10 | None
+Spartacus.House.of.Ashur.S01E01.1080p.WEB.H264-SYLiX | Spartacus House Of Ashur | True | 1 | 1 | None
+Breaking.Bad.S05E16.Felina.1080p.BluRay.x264-ROVERS.mkv | Breaking Bad | True | 5 | 16 | None
+
+# TV Shows - Space separators
+The Pitt S01E13 7 00 P M 1080p WEBRip HDR10 10Bit DDP5 1 Atmos HEVC-d3g | The Pitt | True | 1 | 13 | None
+Game of Thrones S08E06 1080p WEB-DL.mkv | Game Of Thrones | True | 8 | 6 | None
+
+# TV Shows - Site prefixes
+www.UIndex.org - The Pitt S01E13 7 00 P M 1080p | The Pitt | True | 1 | 13 | None
+
+# TV Shows - Alternate patterns
+The.Mandalorian.1x01.Chapter.1.1080p.mkv | The Mandalorian | True | 1 | 1 | None
+Better.Call.Saul.2x05.Rebecca.720p.mkv | Better Call Saul | True | 2 | 5 | None
+
+# Movies - With year
+1917.2019.1080p.AMZN.WEB-DL.DDP5.1.H.264-TEPES.mkv | 1917 | False | None | None | 2019
+12.Angry.Men.1957.720p.BRrip.x264.YIFY.mp4 | 12 Angry Men | False | None | None | 1957
+The.Matrix.1999.1080p.BluRay.x264.mkv | The Matrix | False | None | None | 1999
+
+# Movies - Without year
+Inception.1080p.BluRay.x264.mkv | Inception | False | None | None | None
+Interstellar.2160p.UHD.BluRay.mkv | Interstellar | False | None | None | None
+
+# Edge cases
+The.Office.US.S01E01.Pilot.mkv | The Office Us | True | 1 | 1 | None
+Mr.Robot.S01E01.eps1.0_hellofriend.mov.1080p.mkv | Mr Robot | True | 1 | 1 | None

@@ -1,3 +1,11 @@
+.vscode*
+**/*.env*
+
+
+mock_test/test_media/*
+mock_test/mock_test_rubric.csv
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
