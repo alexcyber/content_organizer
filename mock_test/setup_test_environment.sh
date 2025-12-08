@@ -1,6 +1,6 @@
 #!/bin/bash
 # Setup test environment from CSV rubric
-# Reads mock_test_rubric.csv and creates files/folders based on "Starting" column
+# Reads mock_test_rubric.csv and creates files/folders based on "Starting" and "Remote" columns
 
 set -e
 
@@ -9,6 +9,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_DIR="$SCRIPT_DIR/test_media"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CSV_FILE="$SCRIPT_DIR/mock_test_rubric.csv"
+
+# Source SFTP helper functions
+source "$SCRIPT_DIR/sftp_helper.sh"
 
 echo "============================================================================"
 echo "Setting up test environment from CSV rubric"
@@ -22,6 +25,34 @@ echo ""
 if [ ! -f "$CSV_FILE" ]; then
     echo "ERROR: CSV rubric file not found at $CSV_FILE"
     exit 1
+fi
+
+# Check if SFTP is configured
+if is_sftp_enabled; then
+    echo "SFTP Configuration detected:"
+    echo "  Host: $SFTP_HOST:$SFTP_PORT"
+    echo "  Remote Dir: $SFTP_REMOTE_DIR"
+    echo ""
+
+    # Test SFTP connection
+    if ! sftp_test_connection; then
+        echo ""
+        echo "WARNING: SFTP connection failed. Remote files will not be created."
+        echo "         Local test environment will still be set up."
+        echo ""
+        SFTP_ENABLED=false
+    else
+        SFTP_ENABLED=true
+        echo ""
+        # Clean up remote directory
+        echo "Cleaning up remote SFTP directory..."
+        sftp_cleanup_all
+        echo ""
+    fi
+else
+    echo "SFTP not configured - skipping remote file creation"
+    echo ""
+    SFTP_ENABLED=false
 fi
 
 # Clean up existing test directory
@@ -42,9 +73,11 @@ echo ""
 echo "Creating directories from CSV (entries ending with /)..."
 
 # Create directories - ONLY entries that end with /
-tail -n +2 "$CSV_FILE" | while IFS=, read -r starting final test; do
+REMOTE_DIRS_CREATED=0
+while IFS=, read -r remote starting final test || [ -n "$remote" ]; do
     # Remove BOM and trim whitespace
-    starting=$(echo "$starting" | sed 's/^\xEF\xBB\xBF//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    remote=$(echo "$remote" | sed 's/^\xEF\xBB\xBF//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    starting=$(echo "$starting" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
     # Skip if starting is empty or "Null"
     if [ -z "$starting" ] || [ "$starting" = "Null" ]; then
@@ -59,16 +92,27 @@ tail -n +2 "$CSV_FILE" | while IFS=, read -r starting final test; do
             echo "  Creating directory: $dir_path"
             mkdir -p "$full_path"
         fi
+
+        # Create remote directory if specified and SFTP is enabled
+        if [ "$SFTP_ENABLED" = true ] && [ -n "$remote" ] && [ "$remote" != "Null" ]; then
+            if [[ "$remote" == */ ]]; then
+                echo "    Creating remote directory: $remote"
+                sftp_create_directory "$remote" || echo "      WARNING: Failed to create remote directory"
+                REMOTE_DIRS_CREATED=$((REMOTE_DIRS_CREATED + 1))
+            fi
+        fi
     fi
-done
+done < <(tail -n +2 "$CSV_FILE")
 
 echo ""
 echo "Creating files from CSV..."
 
 # Create files - ONLY entries that do NOT end with /
-tail -n +2 "$CSV_FILE" | while IFS=, read -r starting final test; do
+REMOTE_FILES_CREATED=0
+while IFS=, read -r remote starting final test || [ -n "$remote" ]; do
     # Remove BOM and trim whitespace
-    starting=$(echo "$starting" | sed 's/^\xEF\xBB\xBF//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    remote=$(echo "$remote" | sed 's/^\xEF\xBB\xBF//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    starting=$(echo "$starting" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
     # Skip if starting is empty or "Null"
     if [ -z "$starting" ] || [ "$starting" = "Null" ]; then
@@ -94,7 +138,16 @@ tail -n +2 "$CSV_FILE" | while IFS=, read -r starting final test; do
         echo "  Creating file: $starting"
         touch "$full_path"
     fi
-done
+
+    # Create remote file if specified and SFTP is enabled
+    if [ "$SFTP_ENABLED" = true ] && [ -n "$remote" ] && [ "$remote" != "Null" ]; then
+        if [[ "$remote" != */ ]]; then
+            echo "    Creating remote file: $remote"
+            sftp_create_file "$remote" 100 || echo "      WARNING: Failed to create remote file"
+            REMOTE_FILES_CREATED=$((REMOTE_FILES_CREATED + 1))
+        fi
+    fi
+done < <(tail -n +2 "$CSV_FILE")
 
 echo ""
 echo "============================================================================"
@@ -107,8 +160,15 @@ echo ""
 # Show statistics
 echo "Statistics:"
 echo "  Total entries in CSV: $(tail -n +2 "$CSV_FILE" | wc -l)"
-echo "  Files created: $(find "$TEST_DIR" -type f | wc -l)"
-echo "  Directories created: $(find "$TEST_DIR" -type d | wc -l)"
+echo "  Local files created: $(find "$TEST_DIR" -type f | wc -l)"
+echo "  Local directories created: $(find "$TEST_DIR" -type d | wc -l)"
+
+if [ "$SFTP_ENABLED" = true ]; then
+    echo ""
+    echo "Remote SFTP Statistics:"
+    echo "  Remote files created: $REMOTE_FILES_CREATED"
+    echo "  Remote directories created: $REMOTE_DIRS_CREATED"
+fi
 echo ""
 
 # Show directory structure

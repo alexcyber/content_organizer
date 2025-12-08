@@ -19,16 +19,16 @@ This single command:
 ### 1. Setup Environment
 
 ```bash
-# First time only (creates test_media/ with 30+ sample files)
+# First time only (creates test_media/ with 50+ sample files)
 ./setup_test_environment.sh
 ```
 
 Creates:
-- **26 video files** in `TV_Downloads/`
-- **4 video folders** (scene releases)
-- **4 existing Current TV show folders** (for fuzzy matching tests)
-- **2 existing Concluded TV show folders**
-- **3 existing Movie folders**
+- **52 video files** in `TV_Downloads/`
+- **Multiple video folders** (scene releases)
+- **Existing Current/Concluded TV show folders** (for fuzzy matching tests)
+- **Existing Movie folders**
+- **Remote files on SFTP server** (if SFTP configured in `.env.test`)
 
 ### 2. Preview Environment (Before)
 
@@ -79,24 +79,30 @@ Shows:
 ### 6. Verify Moves Succeeded
 
 ```bash
-# Check for any failures
-./check_move_failures.sh
+# CSV-based verification (verifies local files + remote SFTP deletion)
+./verify_test_results.sh
 ```
 
-Analyzes:
-- ✅ Log file for ERROR messages
-- ✅ Move success rate (should be 100%)
-- ✅ Files remaining in downloads
-- ✅ Permission issues
-- ✅ Failed operations
+Verifies:
+- ✅ All files are in expected final locations (from CSV)
+- ✅ Remote files were deleted from SFTP server (if configured)
+- ✅ Local file moves completed successfully
+- ✅ Directory structures are correct
 
 **Exit codes:**
-- `0` = All moves successful
+- `0` = All verifications passed
 - `1` = Failures detected
 
 **Output includes:**
+- Local file verification results
+- Remote SFTP deletion verification (if enabled)
 - Console report (color-coded)
-- Detailed report saved to `move_failures_report.txt`
+- Detailed report saved to `verification_report.txt`
+
+**Legacy verification (for detailed log analysis):**
+```bash
+./check_move_failures.sh  # Analyzes logs for errors
+```
 
 ### 7. Reset For Next Test
 
@@ -203,13 +209,15 @@ When failures occur, the report will include:
 
 | Script | Purpose | When To Use |
 |--------|---------|-------------|
-| `setup_test_environment.sh` | Create test environment | First time only |
+| `setup_test_environment.sh` | Create test environment (local + remote) | First time only |
 | `inspect_test_environment.sh` | Show current state | Before/after testing |
 | `run_test.sh --dry-run` | Preview operations | Before actual run |
-| `run_test.sh` | Run organizer | To actually move files |
-| `check_move_failures.sh` | Verify success | After running test |
+| `run_test.sh` | Run organizer (with SFTP deletion if configured) | To actually move files |
+| `verify_test_results.sh` | CSV-based verification (local + remote) | After running test |
+| `check_move_failures.sh` | Log analysis (legacy) | Detailed debugging |
 | `run_test_and_verify.sh` | Run + verify | Easiest complete test |
 | `reset_test_environment.sh` | Wipe and recreate | Between tests |
+| `sftp_helper.sh` | SFTP operations (sourced by other scripts) | Internal use |
 
 ### Script Options
 

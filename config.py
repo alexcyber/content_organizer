@@ -43,6 +43,19 @@ VIDEO_EXTENSIONS = {
     ".webm", ".m4v", ".mpg", ".mpeg", ".m2ts"
 }
 
+# SFTP configuration for remote file deletion
+SFTP_HOST = os.getenv("SFTP_HOST", "")
+SFTP_PORT = int(os.getenv("SFTP_PORT", "22"))
+SFTP_USER = os.getenv("SFTP_USER", "")
+SFTP_PASSWORD = os.getenv("SFTP_PASSWORD", "")
+SFTP_REMOTE_DIR = os.getenv("SFTP_REMOTE_DIR", "")
+SFTP_TIMEOUT = int(os.getenv("SFTP_TIMEOUT", "30"))
+
+# File transfer completion verification
+# Ensures all files are fully transferred before processing
+FILE_STABILITY_CHECK_INTERVAL = int(os.getenv("FILE_STABILITY_CHECK_INTERVAL", "10"))  # seconds between checks
+FILE_STABILITY_CHECK_RETRIES = int(os.getenv("FILE_STABILITY_CHECK_RETRIES", "2"))  # number of checks to perform
+
 
 def validate_config() -> List[str]:
     """

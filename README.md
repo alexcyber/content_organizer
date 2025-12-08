@@ -1,3 +1,6 @@
+# Developer Purpose
+This project was 100% written by AI.  The only section that wasn't, is this this one right here.  The purpose of this project was to understand how "Vibe Coding" works and to see how "production code" could be written with it to solve a problem for a friend.
+
 # Media File Organizer
 
 Automated media file organizer that monitors your download directory and routes files to appropriate destinations based on content type. Intelligently determines if TV shows are currently airing or concluded using TMDB API.

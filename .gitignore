@@ -1,10 +1,10 @@
 .vscode*
-**/*.env*
-
-
+**/*.env
+**/*.env.test
+mock_test/verification_report.txt
 mock_test/test_media/*
-mock_test/mock_test_rubric.csv
-
+mock_test/mock_test_rubric*
+tree.sh
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

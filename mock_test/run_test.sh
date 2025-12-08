@@ -8,11 +8,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 TEST_DIR="$SCRIPT_DIR/test_media"
 
+# Source SFTP helper functions
+source "$SCRIPT_DIR/sftp_helper.sh"
+
 cd "$PROJECT_ROOT"
 
 # Parse arguments
 DRY_RUN=""
 RESET=false
+SFTP_DELETE_MANUAL=""
 
 for arg in "$@"; do
     case $arg in
@@ -24,18 +28,26 @@ for arg in "$@"; do
             RESET=true
             shift
             ;;
+        --sftp-delete)
+            SFTP_DELETE_MANUAL="--sftp-delete"
+            shift
+            ;;
         --help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --dry-run    Run in dry-run mode (no files moved)"
-            echo "  --reset      Reset test environment before running"
-            echo "  --help       Show this help message"
+            echo "  --dry-run       Run in dry-run mode (no files moved)"
+            echo "  --reset         Reset test environment before running"
+            echo "  --sftp-delete   Enable SFTP remote file deletion"
+            echo "  --help          Show this help message"
             echo ""
             echo "Examples:"
-            echo "  $0                    # Run organizer on test data"
-            echo "  $0 --dry-run          # Preview without moving files"
-            echo "  $0 --reset --dry-run  # Reset environment and preview"
+            echo "  $0                         # Run organizer on test data"
+            echo "  $0 --dry-run               # Preview without moving files"
+            echo "  $0 --reset --dry-run       # Reset environment and preview"
+            echo "  $0 --reset --sftp-delete   # Reset and run with SFTP deletion"
+            echo ""
+            echo "Note: SFTP deletion is auto-detected from .env.test if not explicitly specified"
             exit 0
             ;;
     esac
@@ -62,6 +74,25 @@ else
     exit 1
 fi
 
+# Check if SFTP should be used
+SFTP_DELETE=""
+
+# If user explicitly passed --sftp-delete, use it
+if [ -n "$SFTP_DELETE_MANUAL" ]; then
+    SFTP_DELETE="$SFTP_DELETE_MANUAL"
+    echo "SFTP deletion manually enabled"
+# Otherwise, auto-detect from configuration
+elif is_sftp_enabled; then
+    if sftp_test_connection > /dev/null 2>&1; then
+        SFTP_DELETE="--sftp-delete"
+        echo "SFTP deletion auto-detected and enabled"
+    else
+        echo "WARNING: SFTP configured but connection failed - remote deletion disabled"
+    fi
+else
+    echo "SFTP not configured - remote deletion disabled"
+fi
+
 echo ""
 echo "============================================================================"
 echo "Running Media Organizer in TEST MODE"
@@ -72,12 +103,20 @@ echo "  Download Dir:    $MEDIA_DOWNLOAD_DIR"
 echo "  Movie Dir:       $MEDIA_MOVIE_DIR"
 echo "  TV Current Dir:  $MEDIA_TV_CURRENT_DIR"
 echo "  TV Concluded Dir: $MEDIA_TV_CONCLUDED_DIR"
+if [ -n "$SFTP_DELETE" ]; then
+    echo "  SFTP Deletion:   ENABLED ($SFTP_HOST)"
+else
+    echo "  SFTP Deletion:   DISABLED"
+fi
 echo ""
 
 if [ -n "$DRY_RUN" ]; then
     echo "MODE: DRY-RUN (no files will be moved)"
 else
     echo "MODE: LIVE (files will be moved)"
+    if [ -n "$SFTP_DELETE" ]; then
+        echo "      Remote files will be deleted from SFTP server"
+    fi
 fi
 
 echo ""
@@ -91,7 +130,7 @@ find "$MEDIA_DOWNLOAD_DIR" -mindepth 1 -type d 2>/dev/null | wc -l | xargs echo 
 echo ""
 
 # Run the organizer
-.venv/bin/python3 main.py $DRY_RUN
+.venv/bin/python3 main.py $DRY_RUN $SFTP_DELETE
 
 # Show summary if not dry-run
 if [ -z "$DRY_RUN" ]; then

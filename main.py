@@ -14,8 +14,10 @@ from typing import List
 import config
 from matchers.folder_matcher import FolderMatcher
 from operations.file_mover import FileMover
+from operations.sftp_manager import SFTPManager
 from parsers.content_classifier import ContentClassifier
 from parsers.filename_parser import FilenameParser
+from utils.file_stability import FileStabilityChecker
 from utils.logger import setup_logger
 
 logger = setup_logger()
@@ -59,24 +61,30 @@ class LockFile:
 class MediaOrganizer:
     """Main orchestrator for media file organization."""
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run: bool = False, sftp_delete: bool = False):
         """
         Initialize media organizer.
 
         Args:
             dry_run: If True, only simulate operations
+            sftp_delete: If True, delete files from remote SFTP server after successful move
         """
         self.dry_run = dry_run
+        self.sftp_delete = sftp_delete
         self.parser = FilenameParser()
         self.classifier = ContentClassifier()
         self.matcher = FolderMatcher()
         self.mover = FileMover(dry_run=dry_run)
+        self.sftp_manager = SFTPManager(dry_run=dry_run) if sftp_delete else None
+        self.stability_checker = FileStabilityChecker()
 
         self.stats = {
             "processed": 0,
             "moved": 0,
             "skipped": 0,
-            "errors": 0
+            "errors": 0,
+            "sftp_deleted": 0,
+            "sftp_failed": 0
         }
 
     def run(self) -> int:
@@ -102,11 +110,34 @@ class MediaOrganizer:
             logger.info("No items to process")
             return 0
 
-        logger.info(f"Found {len(items)} items to process")
+        logger.info(f"Found {len(items)} item(s) to process")
+        logger.info("")
 
-        # Process each item
-        for item in items:
+        # Batch stability check - wait once for all items
+        stable_items = self.stability_checker.get_stable_items(items)
+
+        # Calculate skipped items
+        skipped_count = len(items) - len(stable_items)
+        if skipped_count > 0:
+            logger.info("")
+            logger.info(f"Skipping {skipped_count} item(s) still transferring (will retry on next run)")
+            logger.info("")
+
+        if not stable_items:
+            logger.info("No stable items ready to process")
+            self.stats["skipped"] = skipped_count
+            self._print_summary()
+            return 0
+
+        logger.info(f"Processing {len(stable_items)} stable item(s)...")
+        logger.info("")
+
+        # Process each stable item
+        for item in stable_items:
             self._process_item(item)
+
+        # Update skipped count
+        self.stats["skipped"] = skipped_count
 
         # Print summary
         self._print_summary()
@@ -175,12 +206,18 @@ class MediaOrganizer:
         """
         Process a single file or folder.
 
+        Assumes item has already been verified as stable by batch check.
+
         Args:
             item: Path to file or folder
         """
         self.stats["processed"] += 1
 
         logger.info(f"Processing: {item.name}")
+
+        # Store original item info for SFTP deletion
+        original_item_name = item.name
+        is_directory = item.is_dir()
 
         try:
             # Parse filename
@@ -217,6 +254,14 @@ class MediaOrganizer:
 
             if final_path:
                 self.stats["moved"] += 1
+
+                # Delete from SFTP if enabled and move was successful
+                if self.sftp_delete and self.sftp_manager:
+                    if self.sftp_manager.delete_remote_item(original_item_name, is_directory=is_directory):
+                        self.stats["sftp_deleted"] += 1
+                    else:
+                        self.stats["sftp_failed"] += 1
+                        logger.warning(f"Failed to delete '{original_item_name}' from SFTP server")
             else:
                 self.stats["errors"] += 1
 
@@ -235,6 +280,13 @@ class MediaOrganizer:
         logger.info(f"Items moved:     {self.stats['moved']}")
         logger.info(f"Items skipped:   {self.stats['skipped']}")
         logger.info(f"Errors:          {self.stats['errors']}")
+
+        # Include SFTP stats if enabled
+        if self.sftp_delete:
+            logger.info(f"SFTP deleted:    {self.stats['sftp_deleted']}")
+            if self.stats['sftp_failed'] > 0:
+                logger.info(f"SFTP failed:     {self.stats['sftp_failed']}")
+
         logger.info("=" * 60)
 
 
@@ -266,6 +318,12 @@ Configuration:
     )
 
     parser.add_argument(
+        "--sftp-delete",
+        action="store_true",
+        help="Delete files from remote SFTP server after successful move"
+    )
+
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 1.0.0"
@@ -275,7 +333,7 @@ Configuration:
 
     # Use lock file to prevent concurrent runs
     with LockFile():
-        organizer = MediaOrganizer(dry_run=args.dry_run)
+        organizer = MediaOrganizer(dry_run=args.dry_run, sftp_delete=args.sftp_delete)
         return organizer.run()
 
 

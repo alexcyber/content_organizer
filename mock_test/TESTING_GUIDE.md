@@ -66,12 +66,28 @@ The test environment uses `.env.test` with isolated paths:
 - `MEDIA_TV_CONCLUDED_DIR=./mock_test/test_media/TV_Shows/Concluded`
 - `MEDIA_MOVIE_DIR=./mock_test/test_media/Movies`
 
-**Optional:** Add TMDB API key to `.env.test` for realistic show status detection:
+**Optional: TheTVDB API**
+Add TheTVDB API key to `.env.test` for realistic show status detection:
 ```bash
-TMDB_API_KEY=your_key_here
+TVDB_API_KEY=your_key_here
+```
+Get a free key at: https://thetvdb.com/dashboard/account/apikeys
+
+**Optional: SFTP Remote File Deletion Testing**
+Add SFTP credentials to `.env.test` to test remote file deletion:
+```bash
+SFTP_HOST=your.server.com
+SFTP_PORT=22
+SFTP_USER=your_username
+SFTP_PASSWORD=your_password
+SFTP_REMOTE_DIR=/path/to/remote/test/directory/
 ```
 
-Get a free key at: https://www.themoviedb.org/settings/api
+When SFTP is configured:
+- Setup script creates files on the remote server based on CSV "Remote" column
+- Test script automatically uses `--sftp-delete` flag
+- Verification script checks that remote files were deleted
+- Gracefully disables SFTP if connection fails (falls back to local-only testing)
 
 ---
 
@@ -170,7 +186,7 @@ The test environment covers:
 
 **Content Classification:**
 - ✅ TV shows vs Movies
-- ✅ Current vs Concluded (with TMDB API)
+- ✅ Current vs Concluded (with TheTVDB API)
 - ✅ Season/episode detection
 
 **File Operations:**
@@ -178,6 +194,12 @@ The test environment covers:
 - ✅ Folder structures (scene releases)
 - ✅ Multiple files per show
 - ✅ Non-video files (ignored)
+
+**SFTP Remote File Deletion (optional):**
+- ✅ Remote file creation during setup
+- ✅ Automatic deletion after successful local move
+- ✅ Verification of remote deletion
+- ✅ Graceful fallback when SFTP unavailable
 
 ### Expected Test Results
 
@@ -203,9 +225,28 @@ The test environment covers:
 
 ## Verifying Output
 
-### Quick Verification
+### CSV-Based Verification (Recommended)
 
-After running a test, use the automated verification script:
+After running a test, use the CSV-based verification script:
+
+```bash
+# Verify against CSV rubric
+./verify_test_results.sh
+```
+
+This script:
+1. Verifies all files are in expected final locations (from CSV)
+2. Checks remote SFTP files were deleted (if SFTP configured)
+3. Reports local and remote verification results
+4. Generates detailed report
+
+**Verification includes:**
+- Local file/directory existence checks
+- Remote SFTP deletion checks (when enabled)
+- Separate pass/fail counts for local and remote tests
+- Combined success/failure reporting
+
+### Quick Test + Verify
 
 ```bash
 # Run test and automatically verify
@@ -215,12 +256,21 @@ After running a test, use the automated verification script:
 ./run_test_and_verify.sh --reset
 ```
 
-This script:
-1. Runs the test
-2. Analyzes logs for errors
-3. Checks for unmoved files
-4. Calculates success rate
-5. Generates detailed report
+This script runs the test then calls `verify_test_results.sh` for verification.
+
+### Legacy Log Analysis
+
+For detailed log analysis (debugging specific issues):
+
+```bash
+./check_move_failures.sh
+```
+
+This analyzes logs for:
+1. ERROR messages
+2. Failed move operations
+3. Permission issues
+4. Low success rates
 
 ### Manual Verification
 
@@ -248,31 +298,24 @@ find test_media/TV_Downloads -type f \( -name "*.mkv" -o -name "*.mp4" -o -name 
 ls -lh "test_media/TV_Shows/Current/The Pitt/"
 ```
 
-### Automated Failure Detection
+### Verification Output
 
-The `check_move_failures.sh` script detects:
-
-**Error Types:**
-- ✅ ERROR messages in logs
-- ✅ "Failed to move" operations
-- ✅ Permission denied errors
-- ✅ Low success rate (<90%)
-
-**File System Issues:**
-- ✅ Files remaining in TV_Downloads
-- ✅ Files with special characters
-- ✅ Duplicate file names
-
-**Usage:**
-```bash
-# After running a test
-./check_move_failures.sh
-```
-
-**Output:**
-- Color-coded console report
-- Detailed report saved to `move_failures_report.txt`
+**CSV-based verification (`verify_test_results.sh`):**
+- Checks each file/directory from CSV "Final" column
+- Verifies remote SFTP deletion for items with "Remote" column
+- Color-coded results (✓ green for pass, ✗ red for fail)
+- Separate statistics for local and remote verification
 - Exit code 0 (success) or 1 (failures detected)
+- Detailed report saved to `verification_report.txt`
+
+**Legacy log analysis (`check_move_failures.sh`):**
+- Analyzes log files for ERROR messages
+- Checks for "Failed to move" operations
+- Detects permission denied errors
+- Calculates success rate
+- Lists unmoved files
+- Exit code 0 (success) or 1 (failures detected)
+- Detailed report saved to `move_failures_report.txt`
 
 **Example - Successful Run:**
 ```
@@ -319,21 +362,22 @@ Statistics:
 ### Success Criteria
 
 **100% Success:**
-- All video files moved from TV_Downloads
+- All video files moved from TV_Downloads to expected final locations
+- All remote SFTP files deleted (if SFTP configured)
 - No ERROR messages in logs
-- All moves completed successfully
+- All CSV verification tests passed
 - Only non-video files remain in downloads
 
-**Partial Success (90-99%):**
-- Most files moved successfully
-- Minor issues that didn't block most operations
-- Check logs for specific failures
+**Partial Success:**
+- Most files moved successfully (local verification passes)
+- Minor remote deletion failures (if SFTP enabled)
+- Check verification report for specific issues
 
-**Failure (<90%):**
-- Significant number of files not moved
+**Failure:**
+- Significant number of local files not in expected locations
+- Remote files not deleted (if SFTP was enabled)
 - Multiple errors in logs
-- Review permissions and paths
-- Check failure report for details
+- Review verification_report.txt for details
 
 ---
 
@@ -419,8 +463,18 @@ rm -rf test_media move_failures_report.txt
 - Or rename existing folder to match closer
 
 ### Shows Going to Wrong Destination
-**Without TMDB API:** All shows default to "Current"
-**Solution:** Add TMDB API key to `.env.test`
+**Without TheTVDB API:** All shows default to "Current"
+**Solution:** Add TheTVDB API key to `.env.test`
+
+### SFTP Connection Failures
+If SFTP is configured but verification shows "SFTP Verification: DISABLED":
+- Check SFTP credentials in `.env.test`
+- Verify SFTP server is accessible
+- Test connection manually: `lftp -u user,pass sftp://host:port`
+- Check firewall/network settings
+- Review setup script output for connection errors
+
+**Note:** SFTP is optional - tests will run with local-only verification if SFTP is unavailable
 
 ---
 

@@ -15,6 +15,7 @@ NC='\033[0m'
 # Parse arguments
 DRY_RUN=""
 RESET=false
+SFTP_DELETE=""
 
 for arg in "$@"; do
     case $arg in
@@ -26,20 +27,28 @@ for arg in "$@"; do
             RESET=true
             shift
             ;;
+        --sftp-delete)
+            SFTP_DELETE="--sftp-delete"
+            shift
+            ;;
         --help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Runs the test and automatically checks for move failures"
             echo ""
             echo "Options:"
-            echo "  --dry-run    Run in dry-run mode (no files moved)"
-            echo "  --reset      Reset test environment before running"
-            echo "  --help       Show this help message"
+            echo "  --dry-run       Run in dry-run mode (no files moved)"
+            echo "  --reset         Reset test environment before running"
+            echo "  --sftp-delete   Enable SFTP remote file deletion"
+            echo "  --help          Show this help message"
             echo ""
             echo "Examples:"
-            echo "  $0                    # Run and verify"
-            echo "  $0 --dry-run          # Dry-run only (no verification)"
-            echo "  $0 --reset            # Reset, run, and verify"
+            echo "  $0                         # Run and verify"
+            echo "  $0 --dry-run               # Dry-run only (no verification)"
+            echo "  $0 --reset                 # Reset, run, and verify"
+            echo "  $0 --reset --sftp-delete   # Reset, run with SFTP deletion, verify"
+            echo ""
+            echo "Note: --sftp-delete is usually auto-detected from .env.test configuration"
             exit 0
             ;;
     esac
@@ -61,6 +70,9 @@ if [ "$RESET" = true ]; then
 fi
 if [ -n "$DRY_RUN" ]; then
     RUN_ARGS="$RUN_ARGS --dry-run"
+fi
+if [ -n "$SFTP_DELETE" ]; then
+    RUN_ARGS="$RUN_ARGS --sftp-delete"
 fi
 
 "$SCRIPT_DIR/run_test.sh" $RUN_ARGS

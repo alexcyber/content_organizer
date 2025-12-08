@@ -101,14 +101,14 @@ class FolderMatcher:
         destination_dir: str
     ) -> Path:
         """
-        Find existing folder or create new one for the given title.
+        Find existing folder or determine path for new folder.
 
         Args:
             title: Media title
             destination_dir: Destination directory
 
         Returns:
-            Path to existing or newly created folder
+            Path to existing folder or path where new folder should be created
         """
         # Try to find existing folder
         existing = self.find_matching_folder(title, destination_dir)
@@ -116,11 +116,10 @@ class FolderMatcher:
         if existing:
             return existing
 
-        # Create new folder with cleaned title
+        # Determine path for new folder with cleaned title
         dest_path = Path(destination_dir)
         new_folder = dest_path / self._sanitize_folder_name(title)
 
-        logger.info(f"Creating new folder: {new_folder}")
         return new_folder
 
     @staticmethod
