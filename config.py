@@ -39,7 +39,7 @@ LOCK_FILE = os.getenv("MEDIA_LOCK_FILE", "/tmp/media_organizer.lock")
 CACHE_DIR = os.getenv("MEDIA_CACHE_DIR", "/tmp/media_organizer_cache")
 
 # Directories to skip during processing
-SKIP_DIRS: List[str] = ["@eaDir", "Movies", "Porn", "TV_Shows"]
+SKIP_DIRS: List[str] = ["@eaDir", "Movies", "Porn", ".stfolder"]
 
 # Video file extensions to process
 VIDEO_EXTENSIONS = {
