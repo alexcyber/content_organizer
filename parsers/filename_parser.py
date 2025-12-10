@@ -30,7 +30,12 @@ class ParsedMedia:
     def __str__(self) -> str:
         """String representation for logging."""
         if self.is_tv_show:
-            return f'TV Show - "{self.title}" S{self.season:02d}E{self.episode:02d}'
+            if self.episode is not None:
+                return f'TV Show - "{self.title}" S{self.season:02d}E{self.episode:02d}'
+            elif self.season is not None:
+                return f'TV Show - "{self.title}" S{self.season:02d} (Season Pack)'
+            else:
+                return f'TV Show - "{self.title}"'
         return f'Movie - "{self.title}"' + (f' ({self.year})' if self.year else '')
 
 
@@ -39,9 +44,26 @@ class FilenameParser:
 
     # Season/Episode patterns (ordered by specificity)
     SE_PATTERNS = [
-        re.compile(r'[Ss](\d{1,2})[Ee](\d{1,2})'),  # S01E01, s1e1
-        re.compile(r'(\d{1,2})[xX](\d{1,2})'),      # 1x01, 1X01
-        re.compile(r'[Ss]eason[\s._-]?(\d{1,2})[\s._-]?[Ee]pisode[\s._-]?(\d{1,2})'),  # Season 1 Episode 1
+        re.compile(r'[Ss](\d{1,2})[Ee](\d{1,3})'),  # S01E01, s1e1, S01E186 (supports up to 3-digit episodes)
+        re.compile(r'(\d{1,2})[xX](\d{1,3})'),      # 1x01, 1X01, 1x186
+        re.compile(r'[Ss]eason[\s._-]?(\d{1,2})[\s._-]?[Ee]pisode[\s._-]?(\d{1,3})'),  # Season 1 Episode 1
+    ]
+
+    # Season-only patterns (for season packs/complete series)
+    # These indicate TV shows even without episode numbers
+    SEASON_ONLY_PATTERNS = [
+        # S01, S11 (must be followed by space, dot, dash, or end of string to avoid matching S01E01)
+        re.compile(r'\b[Ss](\d{1,2})(?:\s+|[\._-]+|$)(?![Ee]\d)'),
+        # S01-S05, S01-S02, S1-5, s1->s5
+        re.compile(r'\b[Ss](\d{1,2})(?:[\s._-]*[-–>]+[\s._-]*[Ss]?\d{1,2})+'),
+        # Season 01, Season01, Season 1
+        re.compile(r'\b[Ss]eason[\s._-]?(\d{1,2})\b'),
+        # Season 1-5, Season 01-05
+        re.compile(r'\b[Ss]eason[\s._-]?\d{1,2}[\s._-]*-[\s._-]*\d{1,2}'),
+        # Complete Series, Complete Season, Full Season
+        re.compile(r'\b(?:Complete|Full|Entire)[\s._-]+(?:Series|Seasons?)\b', re.IGNORECASE),
+        # S01-S02-S03 (multiple seasons)
+        re.compile(r'\b[Ss]\d{1,2}(?:[\s._-]*-[\s._-]*[Ss]\d{1,2}){2,}'),
     ]
 
     # Year pattern (4 digits, typically 1900-2099)
@@ -95,6 +117,15 @@ class FilenameParser:
         # Extract season/episode
         season, episode = cls._extract_season_episode(filename)
         is_tv_show = season is not None and episode is not None
+
+        # Check for season packs if not already identified as TV show
+        if not is_tv_show:
+            is_season_pack = cls._is_season_pack(filename)
+            if is_season_pack:
+                is_tv_show = True
+                # Try to extract season from season pack patterns
+                if season is None:
+                    season = cls._extract_season_from_pack(filename)
 
         # Extract year
         year = cls._extract_year(filename)
@@ -152,11 +183,28 @@ class FilenameParser:
 
     @classmethod
     def _extract_quality(cls, filename: str) -> Optional[str]:
-        """Extract quality indicator from filename."""
-        match = cls.QUALITY_PATTERN.search(filename)
-        if match:
-            return match.group(1)
-        return None
+        """
+        Extract quality indicator from filename.
+
+        Prefers resolution indicators (1080p, 720p, etc.) over source indicators (BluRay, WEB-DL, etc.).
+        """
+        # Try to find all quality matches
+        all_matches = cls.QUALITY_PATTERN.findall(filename)
+
+        if not all_matches:
+            return None
+
+        # Resolution patterns to prefer (in order of preference)
+        resolution_patterns = ['2160p', '4K', 'UHD', '1080p', '720p', '480p']
+
+        # Check if any resolution patterns are present
+        for resolution in resolution_patterns:
+            for match in all_matches:
+                if match.lower() == resolution.lower():
+                    return match
+
+        # If no resolution found, return the first quality match (source type)
+        return all_matches[0]
 
     @classmethod
     def _extract_release_group(cls, filename: str) -> Optional[str]:
@@ -164,6 +212,45 @@ class FilenameParser:
         match = cls.RELEASE_GROUP_PATTERN.search(filename)
         if match:
             return match.group(1)
+        return None
+
+    @classmethod
+    def _is_season_pack(cls, filename: str) -> bool:
+        """
+        Check if filename indicates a season pack or complete series.
+
+        Args:
+            filename: Filename to check
+
+        Returns:
+            True if filename matches season pack patterns
+        """
+        for pattern in cls.SEASON_ONLY_PATTERNS:
+            if pattern.search(filename):
+                return True
+        return False
+
+    @classmethod
+    def _extract_season_from_pack(cls, filename: str) -> Optional[int]:
+        """
+        Extract season number from season pack patterns.
+
+        Args:
+            filename: Filename to extract season from
+
+        Returns:
+            Season number if found, None otherwise
+        """
+        # Try patterns with capture groups first
+        for pattern in cls.SEASON_ONLY_PATTERNS:
+            match = pattern.search(filename)
+            if match:
+                # Check if pattern has a capture group for season number
+                try:
+                    if match.groups():
+                        return int(match.group(1))
+                except (ValueError, IndexError):
+                    continue
         return None
 
     @classmethod
@@ -190,6 +277,20 @@ class FilenameParser:
                 # Keep only the part before the season/episode pattern
                 title = title[:match.start()]
                 break
+
+        # If no episode pattern, check for season pack patterns
+        if not (season and episode):
+            # Try to find the earliest season pack pattern match
+            earliest_match = None
+            for pattern in cls.SEASON_ONLY_PATTERNS:
+                match = pattern.search(title)
+                if match:
+                    if earliest_match is None or match.start() < earliest_match.start():
+                        earliest_match = match
+
+            if earliest_match:
+                # Keep only the part before the season pack pattern
+                title = title[:earliest_match.start()]
 
         # If no S/E pattern but we have year, find last year occurrence to cut title
         if not (season and episode) and year:

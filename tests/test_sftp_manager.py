@@ -276,7 +276,8 @@ class TestSFTPManager:
         manager = SFTPManager(
             host="example.com",
             username="user",
-            password="pass"
+            password="pass",
+            remote_dir=""
         )
 
         # Test connection
