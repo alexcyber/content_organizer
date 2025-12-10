@@ -56,6 +56,14 @@ SFTP_TIMEOUT = int(os.getenv("SFTP_TIMEOUT", "30"))
 FILE_STABILITY_CHECK_INTERVAL = int(os.getenv("FILE_STABILITY_CHECK_INTERVAL", "10"))  # seconds between checks
 FILE_STABILITY_CHECK_RETRIES = int(os.getenv("FILE_STABILITY_CHECK_RETRIES", "2"))  # number of checks to perform
 
+# Syncthing integration
+# Enable Syncthing temporary file detection (files with .tmp suffix or .syncthing. prefix)
+SYNCTHING_ENABLED = os.getenv("SYNCTHING_ENABLED", "true").lower() in ("true", "1", "yes")
+SYNCTHING_TMP_PATTERNS = [
+    ".syncthing.*.tmp",  # Standard syncthing temporary files
+    "*.tmp",             # Generic temporary files
+]
+
 
 def validate_config() -> List[str]:
     """

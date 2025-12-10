@@ -13,6 +13,8 @@ Automated media file organizer that monitors your download directory and routes 
 - **Dry-Run Mode**: Preview all operations before committing
 - **Comprehensive Logging**: Structured logs to both console and rotating files
 - **Cron-Compatible**: Designed for automated scheduling with lockfile support
+- **Syncthing Integration**: Automatically detects and waits for Syncthing file synchronization to complete
+- **File Stability Detection**: Dual-method verification using both file size monitoring and Syncthing temporary file detection
 - **Minimal Dependencies**: Uses stdlib where possible
 
 ## Content Routing
@@ -93,6 +95,72 @@ While optional, a TMDB API key is recommended for accurate show status detection
 4. Add key to `.env` file
 
 Without TMDB API key, all TV shows default to "Current" status.
+
+### File Transfer Completion Verification
+
+The organizer uses a dual-method approach to ensure files are fully transferred before processing:
+
+#### 1. File Size Stability Detection (Traditional Method)
+
+Monitors file sizes over time to detect active transfers:
+- Checks file sizes at configurable intervals
+- Compares sizes between checks
+- Only processes files when sizes remain stable
+
+Configure via environment variables:
+```bash
+# Seconds between stability checks (default: 10)
+FILE_STABILITY_CHECK_INTERVAL=10
+
+# Number of checks to perform (default: 2)
+FILE_STABILITY_CHECK_RETRIES=2
+```
+
+#### 2. Syncthing Integration (New)
+
+Detects Syncthing temporary files to prevent premature processing:
+
+**Enabled by default**. Syncthing creates temporary files while syncing:
+- `.syncthing.<filename>.tmp` - Standard Syncthing pattern
+- `<filename>.tmp` - Generic temporary files
+
+The organizer automatically:
+- Detects these temporary files in both single files and nested folder structures
+- Waits for Syncthing to complete synchronization
+- Only processes files/folders when no `.tmp` files are present
+
+**Disable Syncthing detection** (if not using Syncthing):
+```bash
+SYNCTHING_ENABLED=false
+```
+
+**How It Works:**
+
+For **single files** (e.g., `The.Pitt.S01E10.1080p.WEB.h264-ETHEL.mkv`):
+- Checks for `.syncthing.The.Pitt.S01E10.1080p.WEB.h264-ETHEL.mkv.tmp`
+- Waits until temp file is removed before processing
+
+For **folder structures** (e.g., `Breaking.Bad.S05E16.Felina.1080p.BluRay.x264-ROVERS/`):
+- Recursively scans all subdirectories
+- Detects any `.tmp` files at any nesting level
+- Waits until all files in the folder structure are synced
+
+**Example Folder Structure:**
+```
+Spartacus.House.of.Ashur.S01E01.1080p.WEB.H264-SYLiX/
+├── spartacus.house.of.ashur.s01e01.1080p.web.h264-sylix.mkv  ✓ Complete
+├── spartacus.house.of.ashur.s01e01.1080p.web.h264-sylix.nfo  ✓ Complete
+└── Sample/
+    ├── sample.mkv  ⏳ Syncing
+    └── .syncthing.sample.mkv.tmp  ← Detected
+```
+→ Entire folder marked as unstable until Sample/sample.mkv completes
+
+**Benefits:**
+- Works seamlessly with Syncthing file synchronization
+- Prevents partial file processing
+- Handles complex nested folder structures
+- Can be disabled if not using Syncthing (falls back to file size detection only)
 
 ## Usage
 

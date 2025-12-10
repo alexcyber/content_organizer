@@ -1,13 +1,15 @@
 """
 File stability checker to verify files are fully transferred.
 
-Ensures files/directories are completely copied before processing by checking
-if file sizes remain stable over time.
+Ensures files/directories are completely copied before processing by checking:
+1. File sizes remain stable over time (traditional file size monitoring)
+2. No Syncthing temporary files are present (for Syncthing sync detection)
 """
 
 import time
 from pathlib import Path
 from typing import Dict, List
+import fnmatch
 
 import config
 from utils.logger import get_logger
@@ -21,7 +23,8 @@ class FileStabilityChecker:
     def __init__(
         self,
         check_interval: int = config.FILE_STABILITY_CHECK_INTERVAL,
-        retries: int = config.FILE_STABILITY_CHECK_RETRIES
+        retries: int = config.FILE_STABILITY_CHECK_RETRIES,
+        syncthing_enabled: bool = config.SYNCTHING_ENABLED
     ):
         """
         Initialize stability checker.
@@ -29,9 +32,14 @@ class FileStabilityChecker:
         Args:
             check_interval: Seconds to wait between stability checks
             retries: Number of times to verify stability
+            syncthing_enabled: Enable Syncthing temporary file detection
         """
         self.check_interval = check_interval
         self.retries = retries
+        self.syncthing_enabled = syncthing_enabled
+
+        if syncthing_enabled:
+            logger.info("Syncthing integration enabled - will check for temporary files")
 
     def get_stable_items(self, items: List[Path]) -> List[Path]:
         """
@@ -53,9 +61,17 @@ class FileStabilityChecker:
 
         # Build a map of item -> files to check
         item_files_map = {}
+        syncthing_unstable_items = []
+
         for item in items:
             if not item.exists():
                 logger.warning(f"Item does not exist: {item}")
+                continue
+
+            # Check for Syncthing temporary files first
+            if self.syncthing_enabled and self._has_syncthing_tmp_files(item):
+                logger.info(f"'{item.name}' has Syncthing temporary files - still syncing")
+                syncthing_unstable_items.append(item)
                 continue
 
             if item.is_file():
@@ -151,7 +167,7 @@ class FileStabilityChecker:
         """
         Check if a file or directory transfer is complete.
 
-        For files: Checks if file size is stable over time.
+        For files: Checks if file size is stable over time and no Syncthing temp files exist.
         For directories: Recursively checks all files within.
 
         Args:
@@ -162,6 +178,11 @@ class FileStabilityChecker:
         """
         if not path.exists():
             logger.warning(f"Path does not exist: {path}")
+            return False
+
+        # Check for Syncthing temporary files first
+        if self.syncthing_enabled and self._has_syncthing_tmp_files(path):
+            logger.info(f"'{path.name}' has Syncthing temporary files - still syncing")
             return False
 
         # Get all files to check
@@ -265,3 +286,66 @@ class FileStabilityChecker:
             return None
 
         return sizes
+
+    def _has_syncthing_tmp_files(self, path: Path) -> bool:
+        """
+        Check if a file or directory has associated Syncthing temporary files.
+
+        Syncthing creates temporary files with patterns like:
+        - .syncthing.<filename>.tmp
+        - <filename>.tmp (generic temporary files)
+
+        Args:
+            path: Path to file or directory to check
+
+        Returns:
+            True if Syncthing temporary files are detected, False otherwise
+        """
+        if not self.syncthing_enabled:
+            return False
+
+        try:
+            if path.is_file():
+                # For files, check in the parent directory for related temp files
+                parent = path.parent
+                filename = path.name
+
+                # Check for Syncthing temporary file patterns
+                for pattern in config.SYNCTHING_TMP_PATTERNS:
+                    # Check for .syncthing.<filename>.tmp
+                    if pattern == ".syncthing.*.tmp":
+                        syncthing_tmp = parent / f".syncthing.{filename}.tmp"
+                        if syncthing_tmp.exists():
+                            logger.debug(f"Found Syncthing temp file: {syncthing_tmp.name}")
+                            return True
+
+                    # Check for <filename>.tmp
+                    elif pattern == "*.tmp":
+                        if filename.endswith('.tmp'):
+                            logger.debug(f"File has .tmp extension: {filename}")
+                            return True
+                        tmp_file = parent / f"{filename}.tmp"
+                        if tmp_file.exists():
+                            logger.debug(f"Found temp file: {tmp_file.name}")
+                            return True
+
+            elif path.is_dir():
+                # For directories, check for any .tmp files or .syncthing. files
+                for item in path.rglob("*"):
+                    # Check if any file matches Syncthing patterns
+                    if item.is_file():
+                        for pattern in config.SYNCTHING_TMP_PATTERNS:
+                            if pattern == ".syncthing.*.tmp":
+                                if item.name.startswith('.syncthing.') and item.name.endswith('.tmp'):
+                                    logger.debug(f"Found Syncthing temp file in directory: {item.name}")
+                                    return True
+                            elif pattern == "*.tmp":
+                                if item.name.endswith('.tmp'):
+                                    logger.debug(f"Found .tmp file in directory: {item.name}")
+                                    return True
+
+        except (OSError, PermissionError) as e:
+            logger.warning(f"Error checking for Syncthing temp files in {path}: {e}")
+            return False
+
+        return False
