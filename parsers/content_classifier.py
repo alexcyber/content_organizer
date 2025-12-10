@@ -67,7 +67,7 @@ class TVDBClient:
             if self.token:
                 # Token expires in ~30 days, set expiry to 29 days to be safe
                 self.token_expiry = time.time() + (29 * 24 * 60 * 60)
-                logger.info("TheTVDB authentication successful")
+                logger.debug("TheTVDB authentication successful")
             else:
                 logger.error("TheTVDB authentication failed - no token received")
                 self.enabled = False

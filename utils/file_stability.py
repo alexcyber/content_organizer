@@ -39,7 +39,7 @@ class FileStabilityChecker:
         self.syncthing_enabled = syncthing_enabled
 
         if syncthing_enabled:
-            logger.info("Syncthing integration enabled - will check for temporary files")
+            logger.debug("Syncthing integration enabled - will check for temporary files")
 
     def get_stable_items(self, items: List[Path]) -> List[Path]:
         """

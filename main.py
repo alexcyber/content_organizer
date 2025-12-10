@@ -61,16 +61,18 @@ class LockFile:
 class MediaOrganizer:
     """Main orchestrator for media file organization."""
 
-    def __init__(self, dry_run: bool = False, sftp_delete: bool = False):
+    def __init__(self, dry_run: bool = False, sftp_delete: bool = False, quiet: bool = False):
         """
         Initialize media organizer.
 
         Args:
             dry_run: If True, only simulate operations
             sftp_delete: If True, delete files from remote SFTP server after successful move
+            quiet: If True, only log when there's work to do or errors occur
         """
         self.dry_run = dry_run
         self.sftp_delete = sftp_delete
+        self.quiet = quiet
         self.parser = FilenameParser()
         self.classifier = ContentClassifier()
         self.matcher = FolderMatcher()
@@ -94,10 +96,6 @@ class MediaOrganizer:
         Returns:
             Exit code (0 for success, 1 for errors)
         """
-        logger.info("=" * 60)
-        logger.info("Media File Organizer - Starting")
-        logger.info("=" * 60)
-
         # Validate configuration
         issues = config.validate_config()
         for issue in issues:
@@ -107,9 +105,18 @@ class MediaOrganizer:
         items = self._get_items_to_process()
 
         if not items:
-            logger.info("No items to process")
+            # In quiet mode, don't log when there's nothing to do
+            if not self.quiet:
+                logger.info("=" * 60)
+                logger.info("Media File Organizer - Starting")
+                logger.info("=" * 60)
+                logger.info("No items to process")
             return 0
 
+        # Only show banner when there's work to do
+        logger.info("=" * 60)
+        logger.info("Media File Organizer - Starting")
+        logger.info("=" * 60)
         logger.info(f"Found {len(items)} item(s) to process")
         logger.info("")
 
@@ -126,7 +133,9 @@ class MediaOrganizer:
         if not stable_items:
             logger.info("No stable items ready to process")
             self.stats["skipped"] = skipped_count
-            self._print_summary()
+            # Only print summary in quiet mode if there were items found
+            if not self.quiet:
+                self._print_summary()
             return 0
 
         logger.info(f"Processing {len(stable_items)} stable item(s)...")
@@ -350,6 +359,12 @@ Configuration:
     )
 
     parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Quiet mode - only log when there's work to do or errors occur (recommended for cron jobs)"
+    )
+
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 1.0.0"
@@ -359,7 +374,11 @@ Configuration:
 
     # Use lock file to prevent concurrent runs
     with LockFile():
-        organizer = MediaOrganizer(dry_run=args.dry_run, sftp_delete=args.sftp_delete)
+        organizer = MediaOrganizer(
+            dry_run=args.dry_run,
+            sftp_delete=args.sftp_delete,
+            quiet=args.quiet
+        )
         return organizer.run()
 
 
