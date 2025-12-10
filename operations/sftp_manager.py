@@ -72,10 +72,10 @@ class SFTPManager:
             logger.debug(f"SFTP disabled - skipping deletion of '{item_name}'")
             return False
 
-        # Dry-run mode
+        # Dry-run mode - do not connect, just log intention
         if self.dry_run:
             item_type = "directory" if is_directory else "file"
-            logger.info(f"[DRY-RUN] Would search and delete {item_type} from SFTP: {item_name}")
+            logger.info(f"[DRY-RUN] Would search for and delete {item_type} '{item_name}'")
             return True
 
         # Attempt deletion

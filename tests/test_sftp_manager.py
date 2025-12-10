@@ -39,18 +39,24 @@ class TestSFTPManager:
         )
         assert manager.enabled is True
 
-    def test_dry_run_mode(self):
-        """Test that dry-run mode prevents actual deletion."""
+    @patch('paramiko.SSHClient')
+    def test_dry_run_mode(self, mock_ssh_client):
+        """Test that dry-run mode prevents actual deletion and does not connect."""
         manager = SFTPManager(
             host="example.com",
             username="user",
             password="pass",
+            remote_dir="/downloads",
             dry_run=True
         )
 
         # Should return True without attempting connection
         result = manager.delete_remote_file("test.mkv")
         assert result is True
+
+        # Verify no SSH connection was made
+        mock_ssh_client.return_value.connect.assert_not_called()
+        mock_ssh_client.return_value.open_sftp.assert_not_called()
 
     def test_delete_disabled_manager(self):
         """Test deletion with disabled manager returns False."""
@@ -545,8 +551,9 @@ class TestSFTPManager:
         mock_sftp.remove.assert_not_called()
         mock_sftp.rmdir.assert_called_once_with("/downloads/EmptyDir")
 
-    def test_delete_remote_directory_dry_run(self):
-        """Test directory deletion in dry-run mode."""
+    @patch('paramiko.SSHClient')
+    def test_delete_remote_directory_dry_run(self, mock_ssh_client):
+        """Test directory deletion in dry-run mode does not connect."""
         manager = SFTPManager(
             host="example.com",
             username="user",
@@ -558,6 +565,10 @@ class TestSFTPManager:
         # Should return True without attempting connection
         result = manager.delete_remote_item("AAA", is_directory=True)
         assert result is True
+
+        # Verify no SSH connection was made
+        mock_ssh_client.return_value.connect.assert_not_called()
+        mock_ssh_client.return_value.open_sftp.assert_not_called()
 
     @patch('paramiko.SSHClient')
     def test_delete_remote_item_file_mode(self, mock_ssh_client):

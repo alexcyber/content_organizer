@@ -8,6 +8,10 @@ Supports environment variables for sensitive data.
 import os
 from pathlib import Path
 from typing import List
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Directory paths
 DOWNLOAD_DIR = os.getenv("MEDIA_DOWNLOAD_DIR", "/mnt/media/TV_Downloads")

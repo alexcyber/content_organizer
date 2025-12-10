@@ -256,7 +256,8 @@ class MediaOrganizer:
                 self.stats["moved"] += 1
 
                 # Delete from SFTP if enabled and move was successful
-                if self.sftp_delete and self.sftp_manager:
+                # Only attempt deletion if SFTP is properly configured
+                if self.sftp_delete and self.sftp_manager and self.sftp_manager.enabled:
                     if self.sftp_manager.delete_remote_item(original_item_name, is_directory=is_directory):
                         self.stats["sftp_deleted"] += 1
                     else:
