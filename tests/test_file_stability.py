@@ -371,6 +371,51 @@ class TestFileStabilityChecker:
         # Nonexistent items should not be returned
         assert len(stable) == 0
 
+    def test_single_file_zero_bytes(self, tmp_path):
+        """Test that 0-byte files are not considered stable."""
+        # Create test file with 0 bytes
+        test_file = tmp_path / "video.mkv"
+        test_file.write_bytes(b"")
+
+        # Check stability
+        checker = FileStabilityChecker(check_interval=0.1, retries=2)
+        result = checker.is_transfer_complete(test_file)
+
+        # 0-byte file should not be considered stable
+        assert result is False
+
+    def test_batch_check_zero_byte_file(self, tmp_path):
+        """Test that 0-byte files are not returned in batch check."""
+        # Create test files
+        file1 = tmp_path / "complete.mkv"
+        file1.write_bytes(b"x" * 1000)  # Complete file
+
+        file2 = tmp_path / "empty.mkv"
+        file2.write_bytes(b"")  # 0-byte file
+
+        checker = FileStabilityChecker(check_interval=0.1, retries=2)
+        stable = checker.get_stable_items([file1, file2])
+
+        # Only the complete file should be returned
+        assert len(stable) == 1
+        assert file1 in stable
+        assert file2 not in stable
+
+    def test_batch_check_directory_with_zero_byte_file(self, tmp_path):
+        """Test that directories containing 0-byte files are not considered stable."""
+        # Create directory with mixed files
+        folder = tmp_path / "video_folder"
+        folder.mkdir()
+
+        (folder / "video.mkv").write_bytes(b"")  # 0-byte main file
+        (folder / "subtitle.srt").write_bytes(b"subtitle content")
+
+        checker = FileStabilityChecker(check_interval=0.1, retries=2)
+        stable = checker.get_stable_items([folder])
+
+        # Directory with 0-byte file should not be stable
+        assert len(stable) == 0
+
 
 class TestSyncthingIntegration:
     """Test cases for Syncthing temporary file detection."""

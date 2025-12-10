@@ -154,13 +154,39 @@ class FileStabilityChecker:
                 logger.debug(f"Waiting {self.check_interval} seconds before next check...")
                 time.sleep(self.check_interval)
 
-        # All checks passed - all items are stable
-        stable_items = list(item_files_map.keys())
+        # All checks passed - but check for 0-byte files
+        # Files that are 0 bytes and remain 0 bytes are likely still being created/downloaded
+        stable_items = []
+        zero_byte_items = []
+
+        for item, files in item_files_map.items():
+            # Check if any files in this item are 0 bytes
+            has_zero_byte_file = False
+            for file_path in files:
+                if current_sizes.get(file_path, 0) == 0:
+                    has_zero_byte_file = True
+                    logger.info(
+                        f"'{item.name}' has 0-byte file(s) - likely still downloading. {file_path}"
+                    )
+                    zero_byte_items.append(item)
+                    break
+
+            if not has_zero_byte_file:
+                stable_items.append(item)
+
         total_bytes = sum(current_sizes.values())
-        logger.info(
-            f"Transfer complete for all {len(stable_items)} item(s): "
-            f"{len(all_files)} file(s), {total_bytes:,} bytes total"
-        )
+
+        if zero_byte_items:
+            logger.info(
+                f"Transfer check complete: {len(stable_items)} stable, "
+                f"{len(zero_byte_items)} with 0-byte file(s)"
+            )
+        else:
+            logger.info(
+                f"Transfer complete for all {len(stable_items)} item(s): "
+                f"{len(all_files)} file(s), {total_bytes:,} bytes total"
+            )
+
         return stable_items
 
     def is_transfer_complete(self, path: Path) -> bool:
@@ -235,10 +261,21 @@ class FileStabilityChecker:
             if attempt < self.retries - 1:
                 time.sleep(self.check_interval)
 
-        # All checks passed
+        # All checks passed - but check for 0-byte files
+        # Files that are 0 bytes and remain 0 bytes are likely still being created/downloaded
+        total_bytes = sum(current_sizes.values())
+
+        # Check if any files are 0 bytes
+        for file_path, size in current_sizes.items():
+            if size == 0:
+                logger.info(
+                    f"'{path.name}' has 0-byte file(s) - likely still downloading. {file_path}"
+                )
+                return False
+
         logger.info(
             f"Transfer complete for '{path.name}': "
-            f"{len(files_to_check)} file(s), {sum(current_sizes.values())} bytes total"
+            f"{len(files_to_check)} file(s), {total_bytes:,} bytes total"
         )
         return True
 

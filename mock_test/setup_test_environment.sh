@@ -133,10 +133,11 @@ while IFS=, read -r remote starting final test || [ -n "$remote" ]; do
         mkdir -p "$dir_path"
     fi
 
-    # Create empty file
+    # Create file with content (100 bytes, matching remote file size)
+    # Note: Video files must be non-zero bytes to pass stability checks
     if [ ! -f "$full_path" ]; then
         echo "  Creating file: $starting"
-        touch "$full_path"
+        dd if=/dev/zero of="$full_path" bs=100 count=1 2>/dev/null
     fi
 
     # Create remote file if specified and SFTP is enabled
