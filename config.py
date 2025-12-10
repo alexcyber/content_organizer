@@ -38,8 +38,11 @@ LOG_BACKUP_COUNT = 5
 LOCK_FILE = os.getenv("MEDIA_LOCK_FILE", "/tmp/media_organizer.lock")
 CACHE_DIR = os.getenv("MEDIA_CACHE_DIR", "/tmp/media_organizer_cache")
 
-# Directories to skip during processing
-SKIP_DIRS: List[str] = ["@eaDir", "Movies", "Porn", ".stfolder"]
+# Directories to completely skip during processing
+SKIP_DIRS: List[str] = ["@eaDir", "Porn", ".stfolder"]
+
+# Parent directories to process children from (not the directory itself)
+PARENT_DIRS: List[str] = ["TV_Shows", "Movies"]
 
 # Video file extensions to process
 VIDEO_EXTENSIONS = {

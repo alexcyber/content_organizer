@@ -160,28 +160,53 @@ class MediaOrganizer:
 
         items = []
         for item in download_dir.iterdir():
-            # Skip hidden files and excluded directories
-            if item.name.startswith('.'):
-                continue
-
-            if item.name in config.SKIP_DIRS:
-                logger.debug(f"Skipping excluded directory: {item.name}")
-                continue
-
-            # For files, check if they're video files
-            if item.is_file():
-                if item.suffix.lower() in config.VIDEO_EXTENSIONS:
-                    items.append(item)
-                else:
-                    logger.debug(f"Skipping non-video file: {item.name}")
-            # For directories, check if they contain video files
-            elif item.is_dir():
-                if self._contains_video_files(item):
-                    items.append(item)
-                else:
-                    logger.debug(f"Skipping directory without videos: {item.name}")
-
+            items.extend(self._process_item_for_queue(item))
         return items
+
+    def _process_item_for_queue(self, item: Path) -> List[Path]:
+        """
+        Process an item and return list of items to queue for organization.
+
+        Handles parent directories recursively.
+
+        Args:
+            item: Path to process
+
+        Returns:
+            List of items to add to processing queue
+        """
+        results = []
+
+        # Skip hidden files and excluded directories
+        if item.name.startswith('.'):
+            return results
+
+        if item.name in config.SKIP_DIRS:
+            logger.debug(f"Skipping excluded directory: {item.name}")
+            return results
+
+        # Handle parent directories recursively - process their children instead
+        if item.is_dir() and item.name in config.PARENT_DIRS:
+            logger.debug(f"Processing children of parent directory: {item.name}")
+            for child in item.iterdir():
+                # Recursively process children (handles nested parent dirs)
+                results.extend(self._process_item_for_queue(child))
+            return results
+
+        # For files, check if they're video files
+        if item.is_file():
+            if item.suffix.lower() in config.VIDEO_EXTENSIONS:
+                results.append(item)
+            else:
+                logger.debug(f"Skipping non-video file: {item.name}")
+        # For directories, check if they contain video files
+        elif item.is_dir():
+            if self._contains_video_files(item):
+                results.append(item)
+            else:
+                logger.debug(f"Skipping directory without videos: {item.name}")
+
+        return results
 
     def _contains_video_files(self, directory: Path) -> bool:
         """
