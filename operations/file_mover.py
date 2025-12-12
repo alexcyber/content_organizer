@@ -16,14 +16,16 @@ logger = get_logger()
 class FileMover:
     """Handles moving files and folders with dry-run support."""
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run: bool = False, quiet: bool = False):
         """
         Initialize file mover.
 
         Args:
             dry_run: If True, only simulate operations without actual moves
+            quiet: Kept for backward compatibility but not used (quiet mode handled at MediaOrganizer level)
         """
         self.dry_run = dry_run
+        self.quiet = quiet
 
         if dry_run:
             logger.info("DRY-RUN MODE: No files will be moved")

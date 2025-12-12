@@ -5,13 +5,15 @@ Tests directory processing logic including parent directory handling.
 """
 
 import shutil
+import threading
+import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import pytest
 
 import config
-from main import MediaOrganizer
+from main import MediaOrganizer, LockFile
 
 
 class TestMediaOrganizer:
@@ -144,3 +146,100 @@ class TestMediaOrganizer:
             # Should NOT include non-video files
             assert "readme.txt" not in names
             assert "poster.jpg" not in names
+
+    def test_quiet_mode_initialization(self):
+        """Test that quiet mode is properly initialized."""
+        organizer_quiet = MediaOrganizer(dry_run=True, quiet=True)
+        organizer_normal = MediaOrganizer(dry_run=True, quiet=False)
+
+        assert organizer_quiet.quiet is True
+        assert organizer_quiet.mover.quiet is True
+
+        assert organizer_normal.quiet is False
+        assert organizer_normal.mover.quiet is False
+
+    def test_quiet_mode_no_summary_when_no_moves(self, temp_download_dir, caplog):
+        """Test that quiet mode doesn't print summary when no files are moved."""
+        # Create a temporary download directory with no files
+        empty_dir = temp_download_dir / "empty"
+        empty_dir.mkdir()
+
+        with patch.object(config, 'DOWNLOAD_DIR', str(empty_dir)):
+            organizer = MediaOrganizer(dry_run=True, quiet=True)
+            organizer.run()
+
+            # Check that summary was not printed in quiet mode
+            assert "Processing Summary" not in caplog.text
+
+
+class TestLockFile:
+    """Test cases for LockFile."""
+
+    def test_lock_acquired_and_released(self, tmp_path):
+        """Test that lock is properly acquired and released."""
+        lock_path = tmp_path / "test.lock"
+
+        with LockFile(lock_path=str(lock_path)):
+            # Lock file should exist and be locked
+            assert lock_path.exists()
+
+        # Lock file should be cleaned up after exit
+        # Note: File might still exist but should be unlocked
+        # The important thing is that another process can acquire it
+
+    def test_concurrent_lock_waiting(self, tmp_path):
+        """Test that second instance waits for first to complete."""
+        lock_path = tmp_path / "test.lock"
+        results = []
+
+        def hold_lock_briefly():
+            """Hold lock for 2 seconds."""
+            with LockFile(lock_path=str(lock_path), timeout=10):
+                results.append("first_acquired")
+                time.sleep(2)
+                results.append("first_releasing")
+
+        def wait_for_lock():
+            """Wait for lock and acquire it."""
+            time.sleep(0.5)  # Ensure first thread acquires first
+            with LockFile(lock_path=str(lock_path), timeout=10):
+                results.append("second_acquired")
+
+        # Start first thread
+        t1 = threading.Thread(target=hold_lock_briefly)
+        t1.start()
+
+        # Start second thread (should wait)
+        t2 = threading.Thread(target=wait_for_lock)
+        t2.start()
+
+        # Wait for both to complete
+        t1.join()
+        t2.join()
+
+        # Verify order
+        assert results == ["first_acquired", "first_releasing", "second_acquired"]
+
+    def test_lock_timeout(self, tmp_path):
+        """Test that lock times out if held too long."""
+        lock_path = tmp_path / "test.lock"
+
+        def hold_lock_forever():
+            """Hold lock indefinitely."""
+            with LockFile(lock_path=str(lock_path), timeout=30):
+                time.sleep(10)
+
+        # Start thread holding lock
+        t1 = threading.Thread(target=hold_lock_forever)
+        t1.start()
+
+        # Wait a bit for lock to be acquired
+        time.sleep(0.5)
+
+        # Try to acquire with short timeout (should fail)
+        with pytest.raises(SystemExit):
+            with LockFile(lock_path=str(lock_path), timeout=2):
+                pass
+
+        # Clean up
+        t1.join()

@@ -1,6 +1,7 @@
 #!/bin/bash
 # Setup test environment from CSV rubric
 # Reads mock_test_rubric.csv and creates files/folders based on "Starting" and "Remote" columns
+# Usage: ./setup_test_environment.sh [--sftp-delete]
 
 set -e
 
@@ -12,6 +13,14 @@ CSV_FILE="$SCRIPT_DIR/mock_test_rubric.csv"
 
 # Source SFTP helper functions
 source "$SCRIPT_DIR/sftp_helper.sh"
+
+# Parse arguments
+USE_SFTP=false
+for arg in "$@"; do
+    if [ "$arg" = "--sftp-delete" ]; then
+        USE_SFTP=true
+    fi
+done
 
 echo "============================================================================"
 echo "Setting up test environment from CSV rubric"
@@ -27,8 +36,8 @@ if [ ! -f "$CSV_FILE" ]; then
     exit 1
 fi
 
-# Check if SFTP is configured
-if is_sftp_enabled; then
+# Check if SFTP should be used (only if --sftp-delete was passed)
+if [ "$USE_SFTP" = true ] && is_sftp_enabled; then
     echo "SFTP Configuration detected:"
     echo "  Host: $SFTP_HOST:$SFTP_PORT"
     echo "  Remote Dir: $SFTP_REMOTE_DIR"
@@ -50,8 +59,13 @@ if is_sftp_enabled; then
         echo ""
     fi
 else
-    echo "SFTP not configured - skipping remote file creation"
-    echo ""
+    if [ "$USE_SFTP" = true ]; then
+        echo "WARNING: --sftp-delete specified but SFTP not configured in .env.test"
+        echo ""
+    else
+        echo "SFTP disabled (use --sftp-delete to enable remote file creation)"
+        echo ""
+    fi
     SFTP_ENABLED=false
 fi
 

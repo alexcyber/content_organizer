@@ -1,6 +1,7 @@
 #!/bin/bash
 # Verify test results against CSV rubric
 # Checks that files/folders in "Final" column (where Test=TRUE) exist
+# Usage: ./verify_test_results.sh [--sftp-delete]
 
 set -e
 
@@ -18,6 +19,14 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+
+# Parse arguments
+USE_SFTP=false
+for arg in "$@"; do
+    if [ "$arg" = "--sftp-delete" ]; then
+        USE_SFTP=true
+    fi
+done
 
 echo "============================================================================"
 echo "CSV-Based Test Result Verification"
@@ -37,9 +46,9 @@ if [ ! -d "$TEST_DIR" ]; then
     exit 1
 fi
 
-# Check if SFTP is configured
+# Check if SFTP verification should be enabled (only if --sftp-delete was passed)
 SFTP_VERIFICATION=false
-if is_sftp_enabled; then
+if [ "$USE_SFTP" = true ] && is_sftp_enabled; then
     if sftp_test_connection > /dev/null 2>&1; then
         SFTP_VERIFICATION=true
     fi

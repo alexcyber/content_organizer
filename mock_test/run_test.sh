@@ -17,6 +17,7 @@ cd "$PROJECT_ROOT"
 DRY_RUN=""
 RESET=false
 SFTP_DELETE_MANUAL=""
+QUIET=""
 
 for arg in "$@"; do
     case $arg in
@@ -32,6 +33,10 @@ for arg in "$@"; do
             SFTP_DELETE_MANUAL="--sftp-delete"
             shift
             ;;
+        --quiet)
+            QUIET="--quiet"
+            shift
+            ;;
         --help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -39,6 +44,7 @@ for arg in "$@"; do
             echo "  --dry-run       Run in dry-run mode (no files moved)"
             echo "  --reset         Reset test environment before running"
             echo "  --sftp-delete   Enable SFTP remote file deletion"
+            echo "  --quiet         Quiet mode - only show output when files are moved"
             echo "  --help          Show this help message"
             echo ""
             echo "Examples:"
@@ -46,8 +52,10 @@ for arg in "$@"; do
             echo "  $0 --dry-run               # Preview without moving files"
             echo "  $0 --reset --dry-run       # Reset environment and preview"
             echo "  $0 --reset --sftp-delete   # Reset and run with SFTP deletion"
+            echo "  $0 --quiet                 # Run in quiet mode (cron-friendly)"
+            echo "  $0 --reset --quiet         # Reset and run in quiet mode"
             echo ""
-            echo "Note: SFTP deletion is auto-detected from .env.test if not explicitly specified"
+            echo "Note: SFTP deletion is DISABLED by default. Use --sftp-delete to enable."
             exit 0
             ;;
     esac
@@ -57,10 +65,10 @@ done
 if [ ! -d "$TEST_DIR" ] || [ "$RESET" = true ]; then
     if [ "$RESET" = true ]; then
         echo "Resetting test environment..."
-        bash "$SCRIPT_DIR/reset_test_environment.sh"
+        bash "$SCRIPT_DIR/reset_test_environment.sh" $SFTP_DELETE_MANUAL
     else
         echo "Test environment not found. Creating..."
-        bash "$SCRIPT_DIR/setup_test_environment.sh"
+        bash "$SCRIPT_DIR/setup_test_environment.sh" $SFTP_DELETE_MANUAL
     fi
     echo ""
 fi
@@ -77,20 +85,12 @@ fi
 # Check if SFTP should be used
 SFTP_DELETE=""
 
-# If user explicitly passed --sftp-delete, use it
+# Only enable SFTP if user explicitly passed --sftp-delete
 if [ -n "$SFTP_DELETE_MANUAL" ]; then
     SFTP_DELETE="$SFTP_DELETE_MANUAL"
-    echo "SFTP deletion manually enabled"
-# Otherwise, auto-detect from configuration
-elif is_sftp_enabled; then
-    if sftp_test_connection > /dev/null 2>&1; then
-        SFTP_DELETE="--sftp-delete"
-        echo "SFTP deletion auto-detected and enabled"
-    else
-        echo "WARNING: SFTP configured but connection failed - remote deletion disabled"
-    fi
+    echo "SFTP deletion enabled"
 else
-    echo "SFTP not configured - remote deletion disabled"
+    echo "SFTP deletion disabled (use --sftp-delete to enable)"
 fi
 
 echo ""
@@ -119,6 +119,10 @@ else
     fi
 fi
 
+if [ -n "$QUIET" ]; then
+    echo "OUTPUT: QUIET MODE (only show output when files are moved)"
+fi
+
 echo ""
 echo "============================================================================"
 echo ""
@@ -130,7 +134,7 @@ find "$MEDIA_DOWNLOAD_DIR" -mindepth 1 -type d 2>/dev/null | wc -l | xargs echo 
 echo ""
 
 # Run the organizer
-.venv/bin/python3 main.py $DRY_RUN $SFTP_DELETE
+.venv/bin/python3 main.py $DRY_RUN $SFTP_DELETE $QUIET
 
 # Show summary if not dry-run
 if [ -z "$DRY_RUN" ]; then

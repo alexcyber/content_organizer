@@ -7,7 +7,9 @@ files to appropriate destinations based on content type.
 """
 
 import argparse
+import fcntl
 import sys
+import time
 from pathlib import Path
 from typing import List
 
@@ -24,38 +26,97 @@ logger = setup_logger()
 
 
 class LockFile:
-    """Simple file-based lock to prevent concurrent runs."""
+    """File-based lock using fcntl to prevent concurrent runs.
 
-    def __init__(self, lock_path: str = config.LOCK_FILE):
-        """Initialize lock file."""
+    This implementation uses OS-level file locking (fcntl.flock) which:
+    - Automatically releases when process exits or crashes
+    - Blocks waiting for lock instead of failing immediately
+    - Works correctly with syncthing and other file sync solutions
+    - Only locks the lockfile itself, not downloaded files
+    """
+
+    def __init__(self, lock_path: str = config.LOCK_FILE, timeout: int = 300):
+        """Initialize lock file.
+
+        Args:
+            lock_path: Path to lock file
+            timeout: Maximum seconds to wait for lock (default: 5 minutes)
+        """
         self.lock_path = Path(lock_path)
+        self.timeout = timeout
+        self.lock_file = None
         self.locked = False
 
     def __enter__(self):
-        """Acquire lock."""
-        if self.lock_path.exists():
-            logger.error(f"Lock file exists: {self.lock_path}")
-            logger.error("Another instance may be running. Exiting.")
-            sys.exit(1)
+        """Acquire lock, waiting if another instance is running."""
+        # Ensure lock directory exists
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
 
-        try:
-            self.lock_path.touch()
-            self.locked = True
-            logger.debug(f"Lock acquired: {self.lock_path}")
-        except OSError as e:
-            logger.error(f"Failed to create lock file: {e}")
-            sys.exit(1)
+        # Open lock file (create if doesn't exist)
+        self.lock_file = open(self.lock_path, 'w')
 
-        return self
+        logger.debug(f"Attempting to acquire lock: {self.lock_path}")
+
+        # Try to acquire lock with timeout
+        start_time = time.time()
+        waited = False
+
+        while True:
+            try:
+                # Try non-blocking lock first
+                fcntl.flock(self.lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.locked = True
+
+                if waited:
+                    logger.info(f"Lock acquired after waiting")
+                else:
+                    logger.debug(f"Lock acquired: {self.lock_path}")
+
+                # Write PID to lock file for debugging
+                self.lock_file.write(str(Path('/proc/self').resolve().name if Path('/proc/self').exists() else 'unknown'))
+                self.lock_file.flush()
+
+                return self
+
+            except BlockingIOError:
+                # Lock is held by another process
+                elapsed = time.time() - start_time
+
+                if elapsed >= self.timeout:
+                    logger.error(f"Timeout waiting for lock after {self.timeout} seconds")
+                    logger.error("Another instance is still running. Exiting.")
+                    self.lock_file.close()
+                    sys.exit(1)
+
+                # First time waiting
+                if not waited:
+                    logger.info(f"Another instance is running. Waiting for lock...")
+                    waited = True
+
+                # Wait a bit before retrying
+                time.sleep(1)
+
+            except OSError as e:
+                logger.error(f"Failed to acquire lock: {e}")
+                if self.lock_file:
+                    self.lock_file.close()
+                sys.exit(1)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Release lock."""
-        if self.locked and self.lock_path.exists():
+        if self.locked and self.lock_file:
             try:
-                self.lock_path.unlink()
+                fcntl.flock(self.lock_file.fileno(), fcntl.LOCK_UN)
                 logger.debug(f"Lock released: {self.lock_path}")
             except OSError as e:
-                logger.warning(f"Failed to remove lock file: {e}")
+                logger.warning(f"Failed to release lock: {e}")
+            finally:
+                self.lock_file.close()
+                # Clean up lock file
+                try:
+                    self.lock_path.unlink()
+                except OSError:
+                    pass  # Ignore if already deleted
 
 
 class MediaOrganizer:
@@ -76,7 +137,7 @@ class MediaOrganizer:
         self.parser = FilenameParser()
         self.classifier = ContentClassifier()
         self.matcher = FolderMatcher()
-        self.mover = FileMover(dry_run=dry_run)
+        self.mover = FileMover(dry_run=dry_run, quiet=quiet)
         self.sftp_manager = SFTPManager(dry_run=dry_run) if sftp_delete else None
         self.stability_checker = FileStabilityChecker()
 
@@ -113,30 +174,44 @@ class MediaOrganizer:
                 logger.info("No items to process")
             return 0
 
-        # Only show banner when there's work to do
-        logger.info("=" * 60)
-        logger.info("Media File Organizer - Starting")
-        logger.info("=" * 60)
-        logger.info(f"Found {len(items)} item(s) to process")
-        logger.info("")
+        # Only show banner when there's work to do (unless quiet mode)
+        if not self.quiet:
+            logger.info("=" * 60)
+            logger.info("Media File Organizer - Starting")
+            logger.info("=" * 60)
+            logger.info(f"Found {len(items)} item(s) to process")
+            logger.info("")
 
         # Batch stability check - wait once for all items
         stable_items = self.stability_checker.get_stable_items(items)
 
         # Calculate skipped items
         skipped_count = len(items) - len(stable_items)
-        if skipped_count > 0:
+        if skipped_count > 0 and not self.quiet:
             logger.info("")
             logger.info(f"Skipping {skipped_count} item(s) still transferring (will retry on next run)")
             logger.info("")
 
         if not stable_items:
-            logger.info("No stable items ready to process")
+            if not self.quiet:
+                logger.info("No stable items ready to process")
             self.stats["skipped"] = skipped_count
             # Only print summary in quiet mode if there were items found
             if not self.quiet:
                 self._print_summary()
             return 0
+
+        # We have stable items - show banner in quiet mode now that we know we'll process
+        if self.quiet:
+            logger.info("=" * 60)
+            logger.info("Media File Organizer - Starting")
+            logger.info("=" * 60)
+            logger.info(f"Found {len(items)} item(s) to process")
+            logger.info("")
+            if skipped_count > 0:
+                logger.info("")
+                logger.info(f"Skipping {skipped_count} item(s) still transferring (will retry on next run)")
+                logger.info("")
 
         logger.info(f"Processing {len(stable_items)} stable item(s)...")
         logger.info("")
@@ -361,7 +436,7 @@ Configuration:
     parser.add_argument(
         "--quiet",
         action="store_true",
-        help="Quiet mode - only log when there's work to do or errors occur (recommended for cron jobs)"
+        help="Quiet mode - only show output when files are actually moved (recommended for cron jobs)"
     )
 
     parser.add_argument(

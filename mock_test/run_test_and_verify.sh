@@ -16,6 +16,7 @@ NC='\033[0m'
 DRY_RUN=""
 RESET=false
 SFTP_DELETE=""
+QUIET=""
 
 for arg in "$@"; do
     case $arg in
@@ -31,6 +32,10 @@ for arg in "$@"; do
             SFTP_DELETE="--sftp-delete"
             shift
             ;;
+        --quiet)
+            QUIET="--quiet"
+            shift
+            ;;
         --help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -40,6 +45,7 @@ for arg in "$@"; do
             echo "  --dry-run       Run in dry-run mode (no files moved)"
             echo "  --reset         Reset test environment before running"
             echo "  --sftp-delete   Enable SFTP remote file deletion"
+            echo "  --quiet         Quiet mode - only show output when files are moved"
             echo "  --help          Show this help message"
             echo ""
             echo "Examples:"
@@ -47,8 +53,10 @@ for arg in "$@"; do
             echo "  $0 --dry-run               # Dry-run only (no verification)"
             echo "  $0 --reset                 # Reset, run, and verify"
             echo "  $0 --reset --sftp-delete   # Reset, run with SFTP deletion, verify"
+            echo "  $0 --quiet                 # Run in quiet mode and verify"
+            echo "  $0 --reset --quiet         # Reset, run in quiet mode, and verify"
             echo ""
-            echo "Note: --sftp-delete is usually auto-detected from .env.test configuration"
+            echo "Note: SFTP deletion is DISABLED by default. Use --sftp-delete to enable."
             exit 0
             ;;
     esac
@@ -74,6 +82,9 @@ fi
 if [ -n "$SFTP_DELETE" ]; then
     RUN_ARGS="$RUN_ARGS --sftp-delete"
 fi
+if [ -n "$QUIET" ]; then
+    RUN_ARGS="$RUN_ARGS --quiet"
+fi
 
 "$SCRIPT_DIR/run_test.sh" $RUN_ARGS
 TEST_EXIT_CODE=$?
@@ -94,7 +105,7 @@ echo ""
 sleep 1
 
 # Step 3: Verify against CSV rubric
-"$SCRIPT_DIR/verify_test_results.sh"
+"$SCRIPT_DIR/verify_test_results.sh" $SFTP_DELETE
 VERIFY_EXIT_CODE=$?
 
 echo ""
