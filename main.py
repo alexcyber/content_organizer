@@ -20,7 +20,7 @@ from operations.sftp_manager import SFTPManager
 from parsers.content_classifier import ContentClassifier
 from parsers.filename_parser import FilenameParser
 from utils.file_stability import FileStabilityChecker
-from utils.logger import setup_logger
+from utils.logger import setup_logger, set_quiet_mode
 
 logger = setup_logger()
 
@@ -134,6 +134,12 @@ class MediaOrganizer:
         self.dry_run = dry_run
         self.sftp_delete = sftp_delete
         self.quiet = quiet
+
+        # Enable quiet mode on logger if requested
+        # This suppresses INFO messages on console while keeping them in log file
+        if quiet:
+            set_quiet_mode(True)
+
         self.parser = FilenameParser()
         self.classifier = ContentClassifier()
         self.matcher = FolderMatcher()
@@ -201,8 +207,9 @@ class MediaOrganizer:
                 self._print_summary()
             return 0
 
-        # We have stable items - show banner in quiet mode now that we know we'll process
+        # We have stable items - in quiet mode, re-enable INFO logging for processing
         if self.quiet:
+            set_quiet_mode(False)  # Show INFO messages during actual processing
             logger.info("=" * 60)
             logger.info("Media File Organizer - Starting")
             logger.info("=" * 60)

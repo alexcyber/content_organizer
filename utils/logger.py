@@ -79,3 +79,27 @@ def get_logger(name: str = "media_organizer") -> logging.Logger:
     if not logger.handlers:
         return setup_logger(name)
     return logger
+
+
+def set_quiet_mode(quiet: bool = True) -> None:
+    """
+    Enable or disable quiet mode for console output.
+
+    In quiet mode:
+    - Console output shows only WARNING and above (errors, warnings)
+    - File output continues to show INFO and above (full logs)
+
+    This allows cron jobs to run silently unless there are actual issues.
+
+    Args:
+        quiet: If True, suppress INFO on console; if False, show all INFO
+    """
+    logger = logging.getLogger("media_organizer")
+
+    for handler in logger.handlers:
+        # Only modify console (StreamHandler), not file (RotatingFileHandler)
+        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, RotatingFileHandler):
+            if quiet:
+                handler.setLevel(logging.WARNING)  # Only show warnings and errors
+            else:
+                handler.setLevel(logging.INFO)  # Show all info messages
