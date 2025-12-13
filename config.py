@@ -63,6 +63,13 @@ SFTP_TIMEOUT = int(os.getenv("SFTP_TIMEOUT", "30"))
 FILE_STABILITY_CHECK_INTERVAL = int(os.getenv("FILE_STABILITY_CHECK_INTERVAL", "10"))  # seconds between checks
 FILE_STABILITY_CHECK_RETRIES = int(os.getenv("FILE_STABILITY_CHECK_RETRIES", "2"))  # number of checks to perform
 
+# Allow 0-byte files to be processed (default: false - 0-byte files are considered still downloading)
+ALLOW_ZERO_BYTE_FILES = os.getenv("ALLOW_ZERO_BYTE_FILES", "false").lower() in ("true", "1", "yes")
+
+# Use hash verification for untracked files (files not synced via Syncthing)
+# This provides extra assurance that files are stable before moving
+HASH_CHECK_FOR_UNTRACKED = os.getenv("HASH_CHECK_FOR_UNTRACKED", "true").lower() in ("true", "1", "yes")
+
 # Syncthing integration
 # Enable Syncthing temporary file detection (files with .tmp suffix or .syncthing. prefix)
 SYNCTHING_ENABLED = os.getenv("SYNCTHING_ENABLED", "true").lower() in ("true", "1", "yes")

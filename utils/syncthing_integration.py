@@ -82,15 +82,19 @@ class SyncthingIntegration:
                 folder_id = self._get_folder_id_for_path(folder_path)
                 if folder_id:
                     # Check if this specific folder/file has files still downloading
-                    files_needed, bytes_needed = self._get_path_sync_status(folder_id, folder_path)
+                    files_needed, bytes_needed, is_tracked = self._get_path_sync_status(folder_id, folder_path)
 
-                    if files_needed > 0:
+                    if not is_tracked:
+                        # Path is not tracked by Syncthing (e.g., manually copied)
+                        # Fall back to temp file detection
+                        logger.info(f"Syncthing API: '{folder_path.name}' is not tracked by Syncthing - falling back to temp file detection")
+                    elif files_needed > 0:
                         logger.info(f"Syncthing API result: '{folder_path.name}' has {files_needed} file(s) still downloading ({bytes_needed:,} bytes needed) - still syncing")
                         return True
-
-                    # Path is fully synced via API
-                    logger.info(f"Syncthing API result: '{folder_path.name}' is fully synced (0 files needed) - ready to process")
-                    return False
+                    else:
+                        # Path is fully synced via API
+                        logger.info(f"Syncthing API result: '{folder_path.name}' is fully synced (0 files needed) - ready to process")
+                        return False
                 else:
                     logger.info(f"Syncthing API: Could not map path to Syncthing folder - falling back to temp file detection")
 
@@ -124,15 +128,19 @@ class SyncthingIntegration:
                 folder_id = self._get_folder_id_for_path(file_path)
                 if folder_id:
                     # Check if this specific file is still downloading
-                    files_needed, bytes_needed = self._get_path_sync_status(folder_id, file_path)
+                    files_needed, bytes_needed, is_tracked = self._get_path_sync_status(folder_id, file_path)
 
-                    if files_needed > 0:
+                    if not is_tracked:
+                        # File is not tracked by Syncthing (e.g., manually copied)
+                        # Fall back to temp file detection
+                        logger.info(f"Syncthing API: File '{file_path.name}' is not tracked by Syncthing - falling back to temp file detection")
+                    elif files_needed > 0:
                         logger.info(f"Syncthing API result: File '{file_path.name}' is still downloading ({bytes_needed:,} bytes needed) - still syncing")
                         return True
-
-                    # File is fully synced via API
-                    logger.info(f"Syncthing API result: File '{file_path.name}' is fully synced - ready to process")
-                    return False
+                    else:
+                        # File is fully synced via API
+                        logger.info(f"Syncthing API result: File '{file_path.name}' is fully synced - ready to process")
+                        return False
                 else:
                     logger.info(f"Syncthing API: Could not map path to Syncthing folder - falling back to temp file detection")
 
@@ -158,6 +166,61 @@ class SyncthingIntegration:
         # No temp files found
         logger.info(f"Temp file detection: No temp files found for '{file_path.name}' - ready to process")
         return False
+
+    def get_sync_status(self, path: Path) -> tuple[bool, bool]:
+        """
+        Get detailed sync status for a path.
+
+        This method is used by file_stability to determine what additional
+        checks are needed for items not tracked by Syncthing.
+
+        Args:
+            path: Path to file or directory to check
+
+        Returns:
+            Tuple of (is_syncing, is_tracked) where:
+            - is_syncing: True if actively syncing, False otherwise
+            - is_tracked: True if tracked by Syncthing, False if not (e.g., manually copied)
+        """
+        if not path.exists():
+            return (False, False)
+
+        # Check via Syncthing API
+        if self.enabled and self._is_api_available():
+            try:
+                folder_id = self._get_folder_id_for_path(path)
+                if folder_id:
+                    files_needed, bytes_needed, is_tracked = self._get_path_sync_status(folder_id, path)
+
+                    if not is_tracked:
+                        # Not tracked by Syncthing - check temp files as fallback
+                        if path.is_dir():
+                            has_temp = self._has_temp_files(path)
+                        else:
+                            parent = path.parent
+                            filename = path.name
+                            syncthing_tmp = parent / f".syncthing.{filename}.tmp"
+                            generic_tmp = parent / f"{filename}.tmp"
+                            has_temp = syncthing_tmp.exists() or generic_tmp.exists()
+                        return (has_temp, False)
+
+                    # Tracked by Syncthing
+                    return (files_needed > 0, True)
+
+            except Exception as e:
+                logger.debug(f"Error getting sync status: {e}")
+
+        # Fallback: temp file detection only, consider untracked
+        if path.is_dir():
+            has_temp = self._has_temp_files(path)
+        else:
+            parent = path.parent
+            filename = path.name
+            syncthing_tmp = parent / f".syncthing.{filename}.tmp"
+            generic_tmp = parent / f"{filename}.tmp"
+            has_temp = syncthing_tmp.exists() or generic_tmp.exists()
+
+        return (has_temp, False)
 
     def _is_api_available(self) -> bool:
         """
@@ -298,7 +361,7 @@ class SyncthingIntegration:
 
         return None
 
-    def _get_path_sync_status(self, folder_id: str, path: Path) -> tuple[int, int]:
+    def _get_path_sync_status(self, folder_id: str, path: Path) -> tuple[int, int, bool]:
         """
         Get sync status for a specific path within a Syncthing folder.
 
@@ -309,7 +372,10 @@ class SyncthingIntegration:
             path: Local path to check
 
         Returns:
-            Tuple of (files_count, bytes_needed) for files still downloading or not yet visible
+            Tuple of (files_count, bytes_needed, is_tracked) where:
+            - files_count: Number of files still downloading or not yet visible
+            - bytes_needed: Total bytes still needed
+            - is_tracked: True if Syncthing knows about this path, False if not tracked
         """
         try:
             # Map local path to remote path
@@ -319,7 +385,7 @@ class SyncthingIntegration:
             syncthing_folder_path = self._folders_cache.get(folder_id)
             if not syncthing_folder_path:
                 logger.debug(f"Could not find folder path for ID {folder_id}")
-                return (0, 0)
+                return (0, 0, False)
 
             try:
                 relative_path = remote_path.resolve().relative_to(syncthing_folder_path)
@@ -327,7 +393,7 @@ class SyncthingIntegration:
             except ValueError:
                 # Path is not under this folder
                 logger.debug(f"Path {remote_path} not under folder {syncthing_folder_path}")
-                return (0, 0)
+                return (0, 0, False)
 
             headers = {'X-API-Key': self.api_key}
 
@@ -361,6 +427,7 @@ class SyncthingIntegration:
             # 2. For directories, check if all expected files have appeared locally
             files_not_visible = 0
             bytes_not_visible = 0
+            is_tracked = False  # Will be set to True if Syncthing knows about this path
 
             if path.is_dir():
                 # Get what Syncthing says should be in this directory
@@ -371,6 +438,27 @@ class SyncthingIntegration:
                 )
                 resp_browse.raise_for_status()
                 expected_files = resp_browse.json()
+
+                # Check if Syncthing knows about this path at all
+                # If browse returns empty for a path that exists locally with files,
+                # then this path was not synced via Syncthing (e.g., manually copied)
+                if expected_files:
+                    is_tracked = True
+                else:
+                    # Check if there are local files - if so, Syncthing doesn't know about them
+                    local_file_count = 0
+                    if path.exists() and path.is_dir():
+                        for item in path.rglob('*'):
+                            if item.is_file():
+                                local_file_count += 1
+                                break  # Just need to know if there are any files
+
+                    if local_file_count > 0:
+                        logger.debug(f"Path '{path.name}' exists locally but is not tracked by Syncthing")
+                        return (0, 0, False)
+                    else:
+                        # Empty directory - consider it tracked (or doesn't matter)
+                        is_tracked = True
 
                 # Get what we see locally
                 local_files = set()
@@ -389,6 +477,28 @@ class SyncthingIntegration:
                             files_not_visible += 1
                             bytes_not_visible += file_size
                             logger.debug(f"File '{filename}' expected but not visible locally yet ({file_size:,} bytes)")
+            else:
+                # For files, check if Syncthing knows about the file
+                # Query the parent directory to see if this file is listed
+                parent_prefix = str(relative_path.parent) if relative_path.parent != Path('.') else ''
+                resp_browse = requests.get(
+                    f'{self.api_url}/rest/db/browse?folder={folder_id}&prefix={parent_prefix}',
+                    headers=headers,
+                    timeout=self.api_timeout
+                )
+                resp_browse.raise_for_status()
+                expected_files = resp_browse.json()
+
+                # Check if our file is in the list
+                file_name = path.name
+                for expected_file in expected_files:
+                    if expected_file.get('name', '') == file_name:
+                        is_tracked = True
+                        break
+
+                if not is_tracked:
+                    logger.debug(f"File '{path.name}' exists locally but is not tracked by Syncthing")
+                    return (0, 0, False)
 
             total_files_pending = len(files_downloading) + files_not_visible
             total_bytes_pending = bytes_downloading + bytes_not_visible
@@ -398,14 +508,14 @@ class SyncthingIntegration:
             else:
                 logger.debug(f"Path '{path.name}' is fully synced and all files visible")
 
-            return (total_files_pending, total_bytes_pending)
+            return (total_files_pending, total_bytes_pending, is_tracked)
 
         except requests.RequestException as e:
             logger.debug(f"Error getting path sync status: {e}")
-            return (0, 0)
+            return (0, 0, False)
         except Exception as e:
             logger.debug(f"Unexpected error in path sync status: {e}")
-            return (0, 0)
+            return (0, 0, False)
 
     def _get_folder_completion(self, folder_id: str) -> Optional[float]:
         """

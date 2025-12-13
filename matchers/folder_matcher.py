@@ -19,14 +19,18 @@ logger = get_logger()
 class FolderMatcher:
     """Fuzzy matcher for finding existing media folders."""
 
-    def __init__(self, threshold: int = config.FUZZY_MATCH_THRESHOLD):
+    def __init__(self, threshold: int = config.FUZZY_MATCH_THRESHOLD, quiet: bool = False):
         """
         Initialize folder matcher.
 
         Args:
             threshold: Minimum similarity score (0-100) for a match
+            quiet: If True, store log messages instead of logging them
         """
         self.threshold = threshold
+        self.quiet = quiet
+        # Store last match log for caller to use when quiet=True
+        self.last_match_log: Optional[str] = None
 
     def find_matching_folder(
         self,
@@ -83,10 +87,10 @@ class FolderMatcher:
 
         if score >= self.threshold:
             matched_folder = existing_folders[index]
-            logger.info(
-                f"Fuzzy match: '{title}' -> '{matched_folder.name}' "
-                f"(score: {score})"
-            )
+            log_msg = f"Fuzzy match: '{title}' -> '{matched_folder.name}' (score: {score})"
+            self.last_match_log = log_msg
+            if not self.quiet:
+                logger.info(log_msg)
             return matched_folder
         else:
             logger.debug(

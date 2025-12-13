@@ -10,8 +10,9 @@ import argparse
 import fcntl
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import config
 from matchers.folder_matcher import FolderMatcher
@@ -23,6 +24,18 @@ from utils.file_stability import FileStabilityChecker
 from utils.logger import setup_logger, set_quiet_mode
 
 logger = setup_logger()
+
+
+@dataclass
+class ProcessingRecord:
+    """Record of a single item's processing for deferred logging."""
+    item_name: str
+    classification: str = ""
+    status: str = ""
+    destination: str = ""
+    result: str = ""  # "moved", "error", "skipped", etc.
+    error_message: str = ""
+    logs: List[str] = field(default_factory=list)
 
 
 class LockFile:
@@ -139,8 +152,8 @@ class MediaOrganizer:
         # to ensure lock wait messages are also suppressed
 
         self.parser = FilenameParser()
-        self.classifier = ContentClassifier()
-        self.matcher = FolderMatcher()
+        self.classifier = ContentClassifier(quiet=quiet)
+        self.matcher = FolderMatcher(quiet=quiet)
         self.mover = FileMover(dry_run=dry_run, quiet=quiet)
         self.sftp_manager = SFTPManager(dry_run=dry_run) if sftp_delete else None
         self.stability_checker = FileStabilityChecker()
@@ -154,6 +167,9 @@ class MediaOrganizer:
             "sftp_deleted": 0,
             "sftp_failed": 0
         }
+
+        # Collect processing records for deferred logging in quiet mode
+        self.processing_records: List[ProcessingRecord] = []
 
     def run(self) -> int:
         """
@@ -210,9 +226,10 @@ class MediaOrganizer:
                 self._print_summary()
             return 0
 
-        # Process items in quiet mode - we'll only show output if moves actually occur
-        logger.info(f"Processing {len(stable_items)} stable item(s)...")
-        logger.info("")
+        # Process items - in quiet mode logs are collected for deferred output
+        if not self.quiet:
+            logger.info(f"Processing {len(stable_items)} stable item(s)...")
+            logger.info("")
 
         # Process each stable item
         for item in stable_items:
@@ -225,7 +242,7 @@ class MediaOrganizer:
         if self.quiet and self.stats["moved"] == 0:
             return 0
 
-        # We have moves - in quiet mode, now show the output
+        # We have moves (or not in quiet mode) - show the output
         if self.quiet:
             set_quiet_mode(False)  # Show INFO messages for reporting results
 
@@ -241,6 +258,11 @@ class MediaOrganizer:
                 logger.info("")
                 logger.info(f"Skipping {skipped_count} item(s) still transferring (will retry on next run)")
                 logger.info("")
+
+            # Now log all processing records that were collected
+            logger.info(f"Processing {len(stable_items)} stable item(s)...")
+            logger.info("")
+            self._log_processing_records()
 
         # Print summary
         self._print_summary()
@@ -352,6 +374,15 @@ class MediaOrganizer:
                 results.extend(self._process_item_for_queue(child))
             return results
 
+        # Check for nested media folders (folders with no media patterns containing children that do)
+        # e.g., "The Rookie" containing "The.Rookie.S01...", "The.Rookie.S02...", etc.
+        # or "interstellar" containing "Interstellar.2014.1080p.mkv"
+        if item.is_dir() and self._is_nested_media_folder(item):
+            logger.debug(f"Processing children of nested media folder: {item.name}")
+            for child in item.iterdir():
+                results.extend(self._process_item_for_queue(child))
+            return results
+
         # For files, check if they're video files
         if item.is_file():
             if item.suffix.lower() in config.VIDEO_EXTENSIONS:
@@ -386,18 +417,89 @@ class MediaOrganizer:
 
         return False
 
+    def _is_nested_media_folder(self, directory: Path) -> bool:
+        """
+        Check if directory is a nested media folder that should be unpacked.
+
+        A nested media folder is one where the parent folder name doesn't have
+        recognizable media patterns (year, season/episode) but contains children
+        that do. Examples:
+        - "The Rookie" containing "The.Rookie.S01...", "The.Rookie.S02..." (TV)
+        - "interstellar" containing "Interstellar.2014.1080p.mkv" (Movie)
+        - "interstellar/interstellar/Interstellar.2014..." (deeply nested)
+
+        Args:
+            directory: Directory to check
+
+        Returns:
+            True if directory should be unpacked to process its children
+        """
+        try:
+            # Parse the parent folder name
+            parent_parsed = self.parser.parse(directory.name)
+
+            # If parent already has clear media patterns, process it as-is
+            # TV shows with season/episode patterns are identifiable
+            if parent_parsed.is_tv_show:
+                return False
+            # Movies with years are identifiable
+            if parent_parsed.year is not None:
+                return False
+
+            # Parent has no recognizable patterns - check if children do
+            children = list(directory.iterdir())
+            if not children:
+                return False
+
+            # Check immediate children for media patterns
+            for child in children:
+                if child.name.startswith('.'):
+                    continue
+
+                child_parsed = self.parser.parse(child.name)
+
+                # If any child has recognizable media patterns, this is nested
+                if child_parsed.is_tv_show or child_parsed.year is not None:
+                    return True
+
+                # If child is a directory without patterns, recursively check if IT is nested
+                # This handles deeply nested structures like interstellar/interstellar/Interstellar.2014...
+                if child.is_dir() and self._is_nested_media_folder(child):
+                    return True
+
+            return False
+
+        except (OSError, PermissionError) as e:
+            logger.warning(f"Error checking nested media folder {directory}: {e}")
+            return False
+
     def _process_item(self, item: Path) -> None:
         """
         Process a single file or folder.
 
         Assumes item has already been verified as stable by batch check.
+        In quiet mode, logs are collected into a ProcessingRecord for deferred output.
 
         Args:
             item: Path to file or folder
         """
         self.stats["processed"] += 1
 
-        logger.info(f"Processing: {item.name}")
+        # Reset last log values to avoid stale data from previous items
+        self.classifier.tvdb_client.last_status_log = None
+        self.matcher.last_match_log = None
+        self.mover.last_move_details = None
+
+        # Create a processing record to collect logs for this item
+        record = ProcessingRecord(item_name=item.name)
+
+        def log_info(message: str) -> None:
+            """Log message immediately if not quiet, and always collect for deferred logging."""
+            record.logs.append(message)
+            if not self.quiet:
+                logger.info(message)
+
+        log_info(f"Processing: {item.name}")
 
         # Store original item info for SFTP deletion
         original_item_name = item.name
@@ -406,7 +508,8 @@ class MediaOrganizer:
         try:
             # Parse filename
             parsed = self.parser.parse(item.name)
-            logger.info(f"Classified: {parsed}")
+            record.classification = str(parsed)
+            log_info(f"Classified: {parsed}")
 
             # Classify content and get destination
             classification = self.classifier.classify_content(
@@ -415,10 +518,15 @@ class MediaOrganizer:
                 year=parsed.year
             )
 
+            # Log TheTVDB status lookup (if any)
+            if self.classifier.last_status_log:
+                log_info(self.classifier.last_status_log)
+
             # Log status for TV shows
             if classification["type"] == "tv_show" and classification["status"]:
                 status_name = classification["status"].value.upper()
-                logger.info(f"Status: {status_name}")
+                record.status = status_name
+                log_info(f"Status: {status_name}")
 
             # Find or create destination folder
             destination_dir = classification["destination"]
@@ -426,24 +534,34 @@ class MediaOrganizer:
                 title=parsed.title,
                 destination_dir=destination_dir
             )
+            record.destination = str(destination_folder)
+
+            # Log fuzzy match result (if any)
+            if self.matcher.last_match_log:
+                log_info(self.matcher.last_match_log)
 
             # Log matched folder
             if destination_folder.exists():
-                logger.info(f"Matched existing folder: {destination_folder}")
+                log_info(f"Matched existing folder: {destination_folder}")
             else:
-                logger.info(f"Will create new folder: {destination_folder}")
+                log_info(f"Will create new folder: {destination_folder}")
 
             # Move file/folder
             final_path = self.mover.move(item, destination_folder)
 
             if final_path:
                 self.stats["moved"] += 1
+                record.result = "moved"
+                # Log the move result from FileMover
+                if self.mover.last_move_details:
+                    log_info(self.mover.last_move_details)
 
                 # Delete from SFTP if enabled and move was successful
                 # Only attempt deletion if SFTP is properly configured
                 if self.sftp_delete and self.sftp_manager and self.sftp_manager.enabled:
                     if self.sftp_manager.delete_remote_item(original_item_name, is_directory=is_directory):
                         self.stats["sftp_deleted"] += 1
+                        log_info(f"Deleted from SFTP: {original_item_name}")
                     else:
                         self.stats["sftp_failed"] += 1
                         logger.warning(f"Failed to delete '{original_item_name}' from SFTP server")
@@ -451,14 +569,27 @@ class MediaOrganizer:
                 # Check why the move failed
                 if self.mover.last_skip_reason == MoveSkipReason.STILL_SYNCING:
                     self.stats["still_syncing"] += 1
+                    record.result = "still_syncing"
                 else:
                     self.stats["errors"] += 1
+                    record.result = "error"
 
         except Exception as e:
             logger.error(f"Error processing {item.name}: {e}", exc_info=True)
             self.stats["errors"] += 1
+            record.result = "error"
+            record.error_message = str(e)
 
-        logger.info("")  # Blank line for readability
+        log_info("")  # Blank line for readability
+
+        # Add the record to our collection
+        self.processing_records.append(record)
+
+    def _log_processing_records(self) -> None:
+        """Log all collected processing records (used in quiet mode after moves occur)."""
+        for record in self.processing_records:
+            for log_line in record.logs:
+                logger.info(log_line)
 
     def _print_summary(self) -> None:
         """Print processing summary."""

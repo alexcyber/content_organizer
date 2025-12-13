@@ -29,12 +29,13 @@ class ShowStatus(Enum):
 class TVDBClient:
     """Client for TheTVDB API v4 interactions."""
 
-    def __init__(self, api_key: str = config.TVDB_API_KEY):
+    def __init__(self, api_key: str = config.TVDB_API_KEY, quiet: bool = False):
         """
         Initialize TheTVDB client.
 
         Args:
             api_key: TheTVDB API key
+            quiet: If True, store log messages instead of logging them
         """
         self.api_key = api_key
         self.base_url = config.TVDB_BASE_URL
@@ -42,6 +43,9 @@ class TVDBClient:
         self.enabled = bool(api_key)
         self.token = None
         self.token_expiry = 0
+        self.quiet = quiet
+        # Store last log message for caller to use when quiet=True
+        self.last_status_log: Optional[str] = None
 
         if not self.enabled:
             logger.warning("TheTVDB API key not configured - status checks disabled")
@@ -127,7 +131,8 @@ class TVDBClient:
                 # Get show details
                 details = self._get_tv_show_details(show_id)
                 status = self._determine_status(details)
-                logger.info(f"TheTVDB: '{title}' status = {status.value.upper()}")
+                log_msg = f"TheTVDB: '{title}' status = {status.value.upper()}"
+                self.last_status_log = log_msg
 
             # Cache result
             self.cache.set(cache_key, status.value)
@@ -224,9 +229,20 @@ class TVDBClient:
 class ContentClassifier:
     """Classifier for determining content type and destination."""
 
-    def __init__(self):
-        """Initialize classifier with TheTVDB client."""
-        self.tvdb_client = TVDBClient()
+    def __init__(self, quiet: bool = False):
+        """
+        Initialize classifier with TheTVDB client.
+
+        Args:
+            quiet: If True, store log messages instead of logging them
+        """
+        self.quiet = quiet
+        self.tvdb_client = TVDBClient(quiet=quiet)
+
+    @property
+    def last_status_log(self) -> Optional[str]:
+        """Get the last status log message from TheTVDB client."""
+        return self.tvdb_client.last_status_log
 
     def classify_content(
         self,

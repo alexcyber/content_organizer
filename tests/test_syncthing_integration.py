@@ -128,11 +128,11 @@ class TestSyncthingIntegration:
 
             with patch.object(syncthing, '_is_api_available', return_value=True):
                 with patch.object(syncthing, '_get_folder_id_for_path', return_value='folder1'):
-                    with patch.object(syncthing, '_get_path_sync_status', return_value=(5, 1024)):
+                    with patch.object(syncthing, '_get_path_sync_status', return_value=(5, 1024, True)):
                         # 5 files still downloading - should be syncing
                         assert syncthing.is_folder_syncing(test_folder)
 
-                    with patch.object(syncthing, '_get_path_sync_status', return_value=(0, 0)):
+                    with patch.object(syncthing, '_get_path_sync_status', return_value=(0, 0, True)):
                         # 0 files needed - fully synced
                         assert not syncthing.is_folder_syncing(test_folder)
 
