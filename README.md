@@ -116,11 +116,36 @@ FILE_STABILITY_CHECK_INTERVAL=10
 FILE_STABILITY_CHECK_RETRIES=2
 ```
 
-#### 2. Syncthing Integration (New)
+#### 2. Syncthing Integration
 
-Detects Syncthing temporary files to prevent premature processing:
+The organizer provides comprehensive Syncthing integration using two methods:
 
-**Enabled by default**. Syncthing creates temporary files while syncing:
+**A. Syncthing REST API (Recommended)**
+
+For the most reliable sync detection, configure the Syncthing REST API:
+
+```bash
+# Syncthing API settings (optional but recommended)
+SYNCTHING_URL=http://localhost:8384
+SYNCTHING_API_KEY=your_syncthing_api_key_here
+SYNCTHING_API_TIMEOUT=5  # API request timeout in seconds
+```
+
+To get your Syncthing API key:
+1. Open Syncthing web interface (usually http://localhost:8384)
+2. Go to Settings > General
+3. Copy the "API Key" value
+4. Add to your `.env` file
+
+**Benefits of API integration:**
+- Real-time sync status checking (completion percentage)
+- Detection of in-progress items (syncing/scanning states)
+- Accurate folder mapping
+- Handles edge cases where temp files might not be present
+
+**B. Temporary File Detection (Fallback)**
+
+**Enabled by default**. If API is not configured, falls back to temp file detection:
 - `.syncthing.<filename>.tmp` - Standard Syncthing pattern
 - `<filename>.tmp` - Generic temporary files
 
@@ -129,7 +154,7 @@ The organizer automatically:
 - Waits for Syncthing to complete synchronization
 - Only processes files/folders when no `.tmp` files are present
 
-**Disable Syncthing detection** (if not using Syncthing):
+**Disable all Syncthing detection** (if not using Syncthing):
 ```bash
 SYNCTHING_ENABLED=false
 ```
@@ -156,10 +181,19 @@ Spartacus.House.of.Ashur.S01E01.1080p.WEB.H264-SYLiX/
 ```
 → Entire folder marked as unstable until Sample/sample.mkv completes
 
+**Race Condition Protection:**
+
+The organizer performs a final sync check immediately before moving files:
+- Prevents the race condition where files get added between initial stability check and move
+- Uses Syncthing API if configured (most reliable)
+- Falls back to temp file detection
+- Skips move if sync activity detected, preventing split files across duplicate folders
+
 **Benefits:**
 - Works seamlessly with Syncthing file synchronization
-- Prevents partial file processing
+- Prevents partial file processing and duplicate folder creation
 - Handles complex nested folder structures
+- Dual-layer protection: initial stability check + pre-move verification
 - Can be disabled if not using Syncthing (falls back to file size detection only)
 
 ## Usage

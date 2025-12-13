@@ -71,47 +71,78 @@ SYNCTHING_TMP_PATTERNS = [
     "*.tmp",             # Generic temporary files
 ]
 
+# Syncthing REST API integration (optional, for advanced sync detection)
+# If provided, will use API to detect active syncing in addition to temp file detection
+SYNCTHING_URL = os.getenv("SYNCTHING_URL", "")  # e.g., "http://localhost:8384"
+SYNCTHING_API_KEY = os.getenv("SYNCTHING_API_KEY", "")
+SYNCTHING_API_TIMEOUT = int(os.getenv("SYNCTHING_API_TIMEOUT", "5"))  # API request timeout in seconds
+SYNCTHING_API_ENABLED = bool(SYNCTHING_URL and SYNCTHING_API_KEY)
+
+# Syncthing path mapping (for remote Syncthing or containerized setups)
+# Maps Syncthing's reported paths to local paths
+# Format: "remote_path:local_path,remote_path2:local_path2"
+SYNCTHING_PATH_MAPPING = os.getenv("SYNCTHING_PATH_MAPPING", "")
+
 
 def validate_config() -> List[str]:
     """
     Validate configuration and return list of warnings/errors.
+    Creates directories if they don't exist.
 
     Returns:
         List of warning/error messages
     """
     issues = []
 
-    # Check if download directory exists
-    if not Path(DOWNLOAD_DIR).exists():
-        issues.append(f"Download directory does not exist: {DOWNLOAD_DIR}")
+    # Check and create download directory
+    download_path = Path(DOWNLOAD_DIR)
+    if not download_path.exists():
+        try:
+            download_path.mkdir(parents=True, exist_ok=True)
+            issues.append(f"Created download directory: {DOWNLOAD_DIR}")
+        except PermissionError:
+            issues.append(f"Cannot create download directory: {DOWNLOAD_DIR} (permission denied)")
+        except Exception as e:
+            issues.append(f"Error creating download directory: {DOWNLOAD_DIR} ({e})")
 
-    # Check if destination directories exist
+    # Check and create destination directories
     for dir_name, dir_path in [
         ("Movie", MOVIE_DIR),
         ("TV Current", TV_CURRENT_DIR),
         ("TV Concluded", TV_CONCLUDED_DIR)
     ]:
-        if not Path(dir_path).exists():
-            issues.append(f"{dir_name} directory does not exist: {dir_path}")
+        path = Path(dir_path)
+        if not path.exists():
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+                issues.append(f"Created {dir_name} directory: {dir_path}")
+            except PermissionError:
+                issues.append(f"Cannot create {dir_name} directory: {dir_path} (permission denied)")
+            except Exception as e:
+                issues.append(f"Error creating {dir_name} directory: {dir_path} ({e})")
 
     # Warn if TVDB API key is missing
     if not TVDB_API_KEY:
         issues.append("TVDB_API_KEY not set - will default all shows to 'Current'")
 
-    # Check log directory
+    # Check and create log directory
     log_dir_path = Path(LOG_DIR)
     if not log_dir_path.exists():
         try:
             log_dir_path.mkdir(parents=True, exist_ok=True)
         except PermissionError:
             issues.append(f"Cannot create log directory: {LOG_DIR} (permission denied)")
+        except Exception as e:
+            issues.append(f"Error creating log directory: {LOG_DIR} ({e})")
 
-    # Check cache directory
+    # Check and create cache directory
     cache_dir_path = Path(CACHE_DIR)
     if not cache_dir_path.exists():
         try:
             cache_dir_path.mkdir(parents=True, exist_ok=True)
         except PermissionError:
             issues.append(f"Cannot create cache directory: {CACHE_DIR} (permission denied)")
+        except Exception as e:
+            issues.append(f"Error creating cache directory: {CACHE_DIR} ({e})")
 
     return issues

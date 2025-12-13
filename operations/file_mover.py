@@ -5,12 +5,23 @@ Handles actual file/folder moves or simulates them in dry-run mode.
 """
 
 import shutil
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+import config
 from utils.logger import get_logger
+from utils.file_stability import FileStabilityChecker
+from utils.syncthing_integration import SyncthingIntegration
 
 logger = get_logger()
+
+
+class MoveSkipReason(Enum):
+    """Reasons why a move operation was skipped."""
+    NONE = "none"
+    STILL_SYNCING = "still_syncing"
+    ERROR = "error"
 
 
 class FileMover:
@@ -26,6 +37,17 @@ class FileMover:
         """
         self.dry_run = dry_run
         self.quiet = quiet
+        self.stability_checker = FileStabilityChecker()
+        self.last_skip_reason = MoveSkipReason.NONE
+
+        # Initialize Syncthing integration for pre-move sync detection
+        self.syncthing = SyncthingIntegration(
+            api_url=config.SYNCTHING_URL,
+            api_key=config.SYNCTHING_API_KEY,
+            enabled=config.SYNCTHING_API_ENABLED,
+            api_timeout=config.SYNCTHING_API_TIMEOUT,
+            path_mapping=config.SYNCTHING_PATH_MAPPING
+        )
 
         if dry_run:
             logger.info("DRY-RUN MODE: No files will be moved")
@@ -41,9 +63,29 @@ class FileMover:
         Returns:
             Final path of moved item or None if operation failed
         """
+        # Reset skip reason
+        self.last_skip_reason = MoveSkipReason.NONE
+
         if not source.exists():
             logger.error(f"Source does not exist: {source}")
+            self.last_skip_reason = MoveSkipReason.ERROR
             return None
+
+        # Final check right before move: ensure syncthing is not actively syncing
+        # This prevents the race condition where files get added between initial
+        # stability check and the actual move operation
+        if source.is_dir():
+            if self.syncthing.is_folder_syncing(source):
+                logger.info(f"Source folder is being actively synced: {source.name}")
+                logger.info("Skipping move to prevent partial transfer - will retry on next run")
+                self.last_skip_reason = MoveSkipReason.STILL_SYNCING
+                return None
+        else:
+            if self.syncthing.is_file_syncing(source):
+                logger.info(f"Source file is being actively synced: {source.name}")
+                logger.info("Skipping move to prevent partial transfer - will retry on next run")
+                self.last_skip_reason = MoveSkipReason.STILL_SYNCING
+                return None
 
         # Ensure destination folder exists (or would exist)
         if not self.dry_run:
@@ -74,6 +116,7 @@ class FileMover:
                 return destination_path
             except (OSError, shutil.Error) as e:
                 logger.error(f"Failed to move {source} to {destination_path}: {e}")
+                self.last_skip_reason = MoveSkipReason.ERROR
                 return None
 
     @staticmethod

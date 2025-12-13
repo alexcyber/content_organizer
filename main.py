@@ -15,7 +15,7 @@ from typing import List
 
 import config
 from matchers.folder_matcher import FolderMatcher
-from operations.file_mover import FileMover
+from operations.file_mover import FileMover, MoveSkipReason
 from operations.sftp_manager import SFTPManager
 from parsers.content_classifier import ContentClassifier
 from parsers.filename_parser import FilenameParser
@@ -135,10 +135,8 @@ class MediaOrganizer:
         self.sftp_delete = sftp_delete
         self.quiet = quiet
 
-        # Enable quiet mode on logger if requested
-        # This suppresses INFO messages on console while keeping them in log file
-        if quiet:
-            set_quiet_mode(True)
+        # Note: quiet mode is now set early in main() before LockFile
+        # to ensure lock wait messages are also suppressed
 
         self.parser = FilenameParser()
         self.classifier = ContentClassifier()
@@ -151,6 +149,7 @@ class MediaOrganizer:
             "processed": 0,
             "moved": 0,
             "skipped": 0,
+            "still_syncing": 0,
             "errors": 0,
             "sftp_deleted": 0,
             "sftp_failed": 0
@@ -167,6 +166,10 @@ class MediaOrganizer:
         issues = config.validate_config()
         for issue in issues:
             logger.warning(issue)
+
+        # Log configuration state (unless in quiet mode)
+        if not self.quiet:
+            self._log_configuration()
 
         # Get items to process
         items = self._get_items_to_process()
@@ -207,19 +210,7 @@ class MediaOrganizer:
                 self._print_summary()
             return 0
 
-        # We have stable items - in quiet mode, re-enable INFO logging for processing
-        if self.quiet:
-            set_quiet_mode(False)  # Show INFO messages during actual processing
-            logger.info("=" * 60)
-            logger.info("Media File Organizer - Starting")
-            logger.info("=" * 60)
-            logger.info(f"Found {len(items)} item(s) to process")
-            logger.info("")
-            if skipped_count > 0:
-                logger.info("")
-                logger.info(f"Skipping {skipped_count} item(s) still transferring (will retry on next run)")
-                logger.info("")
-
+        # Process items in quiet mode - we'll only show output if moves actually occur
         logger.info(f"Processing {len(stable_items)} stable item(s)...")
         logger.info("")
 
@@ -230,11 +221,88 @@ class MediaOrganizer:
         # Update skipped count
         self.stats["skipped"] = skipped_count
 
+        # If in quiet mode and no moves occurred, exit silently
+        if self.quiet and self.stats["moved"] == 0:
+            return 0
+
+        # We have moves - in quiet mode, now show the output
+        if self.quiet:
+            set_quiet_mode(False)  # Show INFO messages for reporting results
+
+            # Show configuration since work was done
+            self._log_configuration()
+
+            logger.info("=" * 60)
+            logger.info("Media File Organizer - Starting")
+            logger.info("=" * 60)
+            logger.info(f"Found {len(items)} item(s) to process")
+            logger.info("")
+            if skipped_count > 0:
+                logger.info("")
+                logger.info(f"Skipping {skipped_count} item(s) still transferring (will retry on next run)")
+                logger.info("")
+
         # Print summary
         self._print_summary()
 
         # Return appropriate exit code
         return 0 if self.stats["errors"] == 0 else 1
+
+    def _log_configuration(self) -> None:
+        """Log application configuration and state information."""
+        logger.info("=" * 60)
+        logger.info("Configuration & State Information")
+        logger.info("=" * 60)
+
+        # Syncthing configuration
+        logger.info("Syncthing Integration:")
+        if config.SYNCTHING_API_ENABLED:
+            logger.info(f"  • Method: REST API")
+            logger.info(f"  • API URL: {config.SYNCTHING_URL}")
+            logger.info(f"  • API Timeout: {config.SYNCTHING_API_TIMEOUT}s")
+        elif config.SYNCTHING_ENABLED:
+            logger.info(f"  • Method: Temporary file detection")
+            logger.info(f"  • Patterns: {', '.join(config.SYNCTHING_TMP_PATTERNS)}")
+        else:
+            logger.info(f"  • Status: Disabled")
+
+        # File stability settings
+        logger.info("File Stability Detection:")
+        logger.info(f"  • Check interval: {config.FILE_STABILITY_CHECK_INTERVAL}s")
+        logger.info(f"  • Check retries: {config.FILE_STABILITY_CHECK_RETRIES}")
+
+        # SFTP configuration
+        logger.info("SFTP Remote Deletion:")
+        if self.sftp_delete and self.sftp_manager and self.sftp_manager.enabled:
+            logger.info(f"  • Status: Enabled")
+            logger.info(f"  • Host: {config.SFTP_HOST}:{config.SFTP_PORT}")
+            logger.info(f"  • Remote directory: {config.SFTP_REMOTE_DIR}")
+        else:
+            logger.info(f"  • Status: Disabled")
+
+        # TVDB API
+        logger.info("TVDB API:")
+        if config.TVDB_API_KEY:
+            logger.info(f"  • Status: Configured")
+            logger.info(f"  • Base URL: {config.TVDB_BASE_URL}")
+        else:
+            logger.info(f"  • Status: Not configured (shows will default to 'Current')")
+
+        # Directories
+        logger.info("Directories:")
+        logger.info(f"  • Download: {config.DOWNLOAD_DIR}")
+        logger.info(f"  • Movies: {config.MOVIE_DIR}")
+        logger.info(f"  • TV Current: {config.TV_CURRENT_DIR}")
+        logger.info(f"  • TV Concluded: {config.TV_CONCLUDED_DIR}")
+
+        # Runtime settings
+        logger.info("Runtime Settings:")
+        logger.info(f"  • Dry-run mode: {'Enabled' if self.dry_run else 'Disabled'}")
+        logger.info(f"  • Fuzzy match threshold: {config.FUZZY_MATCH_THRESHOLD}%")
+        logger.info(f"  • Lock file: {config.LOCK_FILE}")
+
+        logger.info("=" * 60)
+        logger.info("")
 
     def _get_items_to_process(self) -> List[Path]:
         """
@@ -380,7 +448,11 @@ class MediaOrganizer:
                         self.stats["sftp_failed"] += 1
                         logger.warning(f"Failed to delete '{original_item_name}' from SFTP server")
             else:
-                self.stats["errors"] += 1
+                # Check why the move failed
+                if self.mover.last_skip_reason == MoveSkipReason.STILL_SYNCING:
+                    self.stats["still_syncing"] += 1
+                else:
+                    self.stats["errors"] += 1
 
         except Exception as e:
             logger.error(f"Error processing {item.name}: {e}", exc_info=True)
@@ -396,6 +468,11 @@ class MediaOrganizer:
         logger.info(f"Items processed: {self.stats['processed']}")
         logger.info(f"Items moved:     {self.stats['moved']}")
         logger.info(f"Items skipped:   {self.stats['skipped']}")
+
+        # Show still syncing separately from errors
+        if self.stats['still_syncing'] > 0:
+            logger.info(f"Still syncing:   {self.stats['still_syncing']} (will retry next run)")
+
         logger.info(f"Errors:          {self.stats['errors']}")
 
         # Include SFTP stats if enabled
@@ -453,6 +530,10 @@ Configuration:
     )
 
     args = parser.parse_args()
+
+    # Enable quiet mode early to suppress INFO logs (including lock wait messages)
+    if args.quiet:
+        set_quiet_mode(True)
 
     # Use lock file to prevent concurrent runs
     with LockFile():
