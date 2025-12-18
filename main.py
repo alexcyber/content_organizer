@@ -21,7 +21,7 @@ from operations.sftp_manager import SFTPManager
 from parsers.content_classifier import ContentClassifier
 from parsers.filename_parser import FilenameParser
 from utils.file_stability import FileStabilityChecker
-from utils.logger import setup_logger, set_quiet_mode
+from utils.logger import setup_logger, set_quiet_mode, set_debug_mode
 
 logger = setup_logger()
 
@@ -156,7 +156,7 @@ class MediaOrganizer:
         self.matcher = FolderMatcher(quiet=quiet)
         self.mover = FileMover(dry_run=dry_run, quiet=quiet)
         self.sftp_manager = SFTPManager(dry_run=dry_run) if sftp_delete else None
-        self.stability_checker = FileStabilityChecker()
+        self.stability_checker = FileStabilityChecker(quiet=quiet)
 
         self.stats = {
             "processed": 0,
@@ -204,21 +204,17 @@ class MediaOrganizer:
             logger.info("=" * 60)
             logger.info("Media File Organizer - Starting")
             logger.info("=" * 60)
-            logger.info(f"Found {len(items)} item(s) to process")
-            logger.info("")
 
         # Batch stability check - wait once for all items
+        # This logs detailed info about which items are stable/unstable
         stable_items = self.stability_checker.get_stable_items(items)
 
         # Calculate skipped items
         skipped_count = len(items) - len(stable_items)
-        if skipped_count > 0 and not self.quiet:
-            logger.info("")
-            logger.info(f"Skipping {skipped_count} item(s) still transferring (will retry on next run)")
-            logger.info("")
 
         if not stable_items:
             if not self.quiet:
+                logger.info("")
                 logger.info("No stable items ready to process")
             self.stats["skipped"] = skipped_count
             # Only print summary in quiet mode if there were items found
@@ -228,6 +224,7 @@ class MediaOrganizer:
 
         # Process items - in quiet mode logs are collected for deferred output
         if not self.quiet:
+            logger.info("")
             logger.info(f"Processing {len(stable_items)} stable item(s)...")
             logger.info("")
 
@@ -252,12 +249,12 @@ class MediaOrganizer:
             logger.info("=" * 60)
             logger.info("Media File Organizer - Starting")
             logger.info("=" * 60)
-            logger.info(f"Found {len(items)} item(s) to process")
+
+            # Replay stability logs that were collected during quiet mode
+            for log_line in self.stability_checker.get_stability_logs():
+                logger.info(log_line)
+
             logger.info("")
-            if skipped_count > 0:
-                logger.info("")
-                logger.info(f"Skipping {skipped_count} item(s) still transferring (will retry on next run)")
-                logger.info("")
 
             # Now log all processing records that were collected
             logger.info(f"Processing {len(stable_items)} stable item(s)...")
@@ -629,6 +626,7 @@ def main() -> int:
 Examples:
   %(prog)s                    # Process files and move them
   %(prog)s --dry-run          # Preview what would be moved
+  %(prog)s --debug            # Run with verbose debug output
   %(prog)s --version          # Show version
 
 Configuration:
@@ -655,12 +653,22 @@ Configuration:
     )
 
     parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging for verbose output"
+    )
+
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 1.0.0"
     )
 
     args = parser.parse_args()
+
+    # Enable debug mode early if requested
+    if args.debug:
+        set_debug_mode(True)
 
     # Enable quiet mode early to suppress INFO logs (including lock wait messages)
     if args.quiet:

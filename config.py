@@ -90,6 +90,29 @@ SYNCTHING_API_ENABLED = bool(SYNCTHING_URL and SYNCTHING_API_KEY)
 # Format: "remote_path:local_path,remote_path2:local_path2"
 SYNCTHING_PATH_MAPPING = os.getenv("SYNCTHING_PATH_MAPPING", "")
 
+# RuTorrent integration (for checking torrent completion on remote seedbox)
+# When enabled, will verify that torrents are complete before processing
+RUTORRENT_ENABLED = os.getenv("RUTORRENT_ENABLED", "false").lower() in ("true", "1", "yes")
+RUTORRENT_URL = os.getenv("RUTORRENT_URL", "")  # e.g., "https://seedbox.example.com/rutorrent/"
+RUTORRENT_USERNAME = os.getenv("RUTORRENT_USERNAME", "")
+RUTORRENT_PASSWORD = os.getenv("RUTORRENT_PASSWORD", "")
+RUTORRENT_TIMEOUT = int(os.getenv("RUTORRENT_TIMEOUT", "30"))  # API request timeout in seconds
+
+# RuTorrent base path on the remote seedbox
+# This is the base directory where torrents are downloaded
+RUTORRENT_BASE_PATH = os.getenv("RUTORRENT_BASE_PATH", "")  # e.g., "/home/user/downloads/manual"
+
+# RuTorrent subfolders to check for torrents (comma-separated)
+# These are subdirectories under RUTORRENT_BASE_PATH where torrents might be located
+# The folder structure should match what appears in your local TV_Downloads
+# Example: "TV_Shows,Movies" means the script will look for torrents in:
+#   - /home/user/downloads/manual/TV_Shows/<torrent_name>
+#   - /home/user/downloads/manual/Movies/<torrent_name>
+_rutorrent_subfolders = os.getenv("RUTORRENT_SUBFOLDERS", "")
+RUTORRENT_SUBFOLDERS: List[str] = [
+    s.strip() for s in _rutorrent_subfolders.split(",") if s.strip()
+] if _rutorrent_subfolders else []
+
 
 def validate_config() -> List[str]:
     """

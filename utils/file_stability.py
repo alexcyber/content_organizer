@@ -2,20 +2,27 @@
 File stability checker to verify files are fully transferred.
 
 Ensures files/directories are completely copied before processing by checking:
-1. File sizes remain stable over time (traditional file size monitoring)
-2. No Syncthing temporary files are present (for Syncthing sync detection)
-3. Syncthing API status (if configured) - most reliable method
-4. File hash verification for untracked files (extra assurance)
+1. RuTorrent API (if configured) - is torrent complete on remote seedbox?
+2. Syncthing temporary file detection - quick local check
+3. Syncthing API status (if configured) - is sync complete locally?
+4. File sizes remain stable over time (fallback for non-torrent items)
+5. File hash verification for untracked files (extra assurance)
+
+The multi-source approach ensures we don't move files until:
+- The torrent download is complete on the seedbox (RuTorrent)
+- The sync to local storage is complete (Syncthing)
+- All files are stable and not changing (fallback checks)
 """
 
 import hashlib
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 import config
 from utils.logger import get_logger
 from utils.syncthing_integration import SyncthingIntegration
+from utils.rutorrent_client import RuTorrentClient
 
 logger = get_logger()
 
@@ -29,7 +36,9 @@ class FileStabilityChecker:
         retries: int = config.FILE_STABILITY_CHECK_RETRIES,
         syncthing_enabled: bool = config.SYNCTHING_ENABLED,
         allow_zero_byte_files: bool = config.ALLOW_ZERO_BYTE_FILES,
-        hash_check_for_untracked: bool = config.HASH_CHECK_FOR_UNTRACKED
+        hash_check_for_untracked: bool = config.HASH_CHECK_FOR_UNTRACKED,
+        rutorrent_enabled: bool = None,
+        quiet: bool = False,
     ):
         """
         Initialize stability checker.
@@ -40,12 +49,34 @@ class FileStabilityChecker:
             syncthing_enabled: Enable Syncthing temporary file detection
             allow_zero_byte_files: Allow 0-byte files to be considered stable
             hash_check_for_untracked: Use hash verification for untracked files
+            rutorrent_enabled: Enable RuTorrent integration (None = use config)
+            quiet: If True, collect logs for deferred output instead of logging immediately
         """
         self.check_interval = check_interval
         self.retries = retries
         self.syncthing_enabled = syncthing_enabled
         self.allow_zero_byte_files = allow_zero_byte_files
         self.hash_check_for_untracked = hash_check_for_untracked
+        self.quiet = quiet
+
+        # Collected logs for deferred output in quiet mode
+        self.stability_logs: List[str] = []
+
+        # Initialize RuTorrent integration for torrent completion detection
+        # RuTorrent checks if the torrent is complete on the remote seedbox
+        rutorrent_enabled = rutorrent_enabled if rutorrent_enabled is not None else getattr(config, 'RUTORRENT_ENABLED', False)
+        self.rutorrent = RuTorrentClient(
+            url=getattr(config, 'RUTORRENT_URL', ''),
+            username=getattr(config, 'RUTORRENT_USERNAME', ''),
+            password=getattr(config, 'RUTORRENT_PASSWORD', ''),
+            base_path=getattr(config, 'RUTORRENT_BASE_PATH', ''),
+            subfolders=getattr(config, 'RUTORRENT_SUBFOLDERS', []),
+            enabled=rutorrent_enabled,
+            timeout=getattr(config, 'RUTORRENT_TIMEOUT', 30)
+        )
+
+        if rutorrent_enabled:
+            logger.debug("RuTorrent integration enabled - will check torrent completion status")
 
         # Initialize Syncthing integration for API-based sync detection
         # Use the syncthing_enabled parameter to control both temp file checks
@@ -61,17 +92,47 @@ class FileStabilityChecker:
         if syncthing_enabled:
             logger.debug("Syncthing integration enabled - will check for temporary files")
 
+    def _log(self, message: str, level: str = "info") -> None:
+        """Log a message, collecting it for deferred output in quiet mode.
+
+        Args:
+            message: The message to log
+            level: Log level (info, debug, warning)
+        """
+        # Always collect INFO level logs for potential deferred output
+        if level == "info":
+            self.stability_logs.append(message)
+
+        # Log immediately if not in quiet mode
+        if not self.quiet:
+            if level == "debug":
+                logger.debug(message)
+            elif level == "warning":
+                logger.warning(message)
+            else:
+                logger.info(message)
+
+    def get_stability_logs(self) -> List[str]:
+        """Get collected stability logs for deferred output.
+
+        Returns:
+            List of log messages from the last stability check
+        """
+        return self.stability_logs
+
+    def clear_stability_logs(self) -> None:
+        """Clear collected stability logs."""
+        self.stability_logs = []
+
     def get_stable_items(self, items: List[Path]) -> List[Path]:
         """
         Check multiple items and return only those that are stable.
 
-        This is more efficient than checking items individually as it performs
-        a single batch check with one wait period.
-
-        For items not tracked by Syncthing, additional verification is performed:
-        - Size stability over multiple checks
-        - Hash stability (if enabled)
-        - 0-byte file detection (unless allowed)
+        Performs a multi-stage check:
+        1. RuTorrent check - is torrent complete on remote seedbox?
+        2. Syncthing temp file check - quick local check for .tmp files
+        3. Syncthing API check - is sync complete locally?
+        4. File stability checks - size/hash verification for untracked items
 
         Args:
             items: List of file/directory paths to check
@@ -82,34 +143,58 @@ class FileStabilityChecker:
         if not items:
             return []
 
-        logger.info(f"Checking stability of {len(items)} item(s)...")
+        # Clear previous logs and start fresh
+        self.clear_stability_logs()
+
+        self._log(f"Checking stability of {len(items)} item(s):")
+        for item in items:
+            self._log(f"  • {item.name}")
 
         # Build maps for tracking
         item_files_map: Dict[Path, List[Path]] = {}
         untracked_items: Set[Path] = set()  # Items not tracked by Syncthing
-        syncthing_unstable_items: List[Path] = []
+        unstable_items: List[Path] = []
+        unstable_reasons: Dict[Path, str] = {}  # Track why each item is unstable
+
+        # Refresh RuTorrent cache once at the start (if enabled)
+        if self.rutorrent.enabled:
+            self.rutorrent.refresh_cache()
 
         for item in items:
             if not item.exists():
-                logger.warning(f"Item does not exist: {item}")
+                self._log(f"Item does not exist: {item}", "warning")
                 continue
 
-            # Check for Syncthing temporary files first (quick check)
+            # Step 1: Check RuTorrent (if enabled) - is torrent complete on remote?
+            if self.rutorrent.enabled:
+                is_complete, reason, torrent_info = self.rutorrent.is_torrent_complete(item.name)
+
+                if torrent_info is not None:
+                    # This is a tracked torrent
+                    if not is_complete:
+                        unstable_items.append(item)
+                        unstable_reasons[item] = f"RuTorrent: {reason}"
+                        continue
+                    else:
+                        self._log(f"'{item.name}' - RuTorrent: {reason}", "debug")
+                # If torrent_info is None, it's not a torrent (manual copy) - continue to other checks
+
+            # Step 2: Check for Syncthing temporary files (quick local check)
             if self.syncthing_enabled and self._has_syncthing_tmp_files(item):
-                logger.info(f"'{item.name}' has Syncthing temporary files - still syncing")
-                syncthing_unstable_items.append(item)
+                unstable_items.append(item)
+                unstable_reasons[item] = "has Syncthing temporary files - still syncing"
                 continue
 
-            # Get detailed sync status (is_syncing, is_tracked)
+            # Step 3: Get detailed Syncthing sync status (is_syncing, is_tracked)
             is_syncing, is_tracked = self.syncthing.get_sync_status(item)
 
             if is_syncing:
-                logger.info(f"'{item.name}' is actively syncing - skipping")
-                syncthing_unstable_items.append(item)
+                unstable_items.append(item)
+                unstable_reasons[item] = "actively syncing via Syncthing"
                 continue
 
             if not is_tracked:
-                logger.info(f"'{item.name}' is not tracked by Syncthing - will use enhanced stability checks")
+                self._log(f"'{item.name}' is not tracked by Syncthing - will use enhanced stability checks", "debug")
                 untracked_items.add(item)
 
             # Collect files for stability checking
@@ -124,6 +209,8 @@ class FileStabilityChecker:
                     item_files_map[item] = files
 
         if not item_files_map:
+            # All items were unstable - log summary
+            self._log_stability_summary([], unstable_items, unstable_reasons)
             return []
 
         # Get all unique files across all items
@@ -133,21 +220,54 @@ class FileStabilityChecker:
 
         if not all_files:
             # All items are empty directories
-            logger.info(f"All {len(item_files_map)} item(s) are empty directories (stable)")
-            return list(item_files_map.keys())
+            stable_items = list(item_files_map.keys())
+            self._log(f"All {len(item_files_map)} item(s) are empty directories (stable)")
+            self._log_stability_summary(stable_items, unstable_items, unstable_reasons)
+            return stable_items
 
         # Perform stability checks with enhanced verification for untracked items
         stable_items = self._perform_stability_checks(
-            item_files_map, all_files, untracked_items
+            item_files_map, all_files, untracked_items, unstable_items, unstable_reasons
         )
 
+        # Log final summary
+        self._log_stability_summary(stable_items, unstable_items, unstable_reasons)
+
         return stable_items
+
+    def _log_stability_summary(
+        self,
+        stable_items: List[Path],
+        unstable_items: List[Path],
+        unstable_reasons: Dict[Path, str]
+    ) -> None:
+        """Log a summary of stable and unstable items.
+
+        Args:
+            stable_items: Items that passed stability checks
+            unstable_items: Items that failed stability checks
+            unstable_reasons: Reasons why each unstable item failed
+        """
+        self._log("")  # Blank line for readability
+
+        if stable_items:
+            self._log(f"Stable items ready for processing ({len(stable_items)}):")
+            for item in stable_items:
+                self._log(f"  ✓ {item.name}")
+
+        if unstable_items:
+            self._log(f"Unstable items skipped ({len(unstable_items)}):")
+            for item in unstable_items:
+                reason = unstable_reasons.get(item, "unknown reason")
+                self._log(f"  ✗ {item.name} - {reason}")
 
     def _perform_stability_checks(
         self,
         item_files_map: Dict[Path, List[Path]],
         all_files: List[Path],
-        untracked_items: Set[Path]
+        untracked_items: Set[Path],
+        unstable_items: List[Path],
+        unstable_reasons: Dict[Path, str]
     ) -> List[Path]:
         """
         Perform stability checks on files.
@@ -158,12 +278,13 @@ class FileStabilityChecker:
             item_files_map: Map of items to their files
             all_files: All files to check
             untracked_items: Items not tracked by Syncthing
+            unstable_items: List to append unstable items to
+            unstable_reasons: Dict to store reasons for instability
 
         Returns:
             List of stable items
         """
         stable_items: List[Path] = []
-        unstable_items: List[Path] = []
 
         # Get files that belong to untracked items (need hash verification)
         untracked_files: Set[Path] = set()
@@ -174,7 +295,7 @@ class FileStabilityChecker:
         # Initial hashes for untracked files (if hash checking enabled)
         previous_hashes: Dict[Path, str] = {}
         if self.hash_check_for_untracked and untracked_files:
-            logger.info(f"Computing initial hashes for {len(untracked_files)} untracked file(s)...")
+            self._log(f"Computing initial hashes for {len(untracked_files)} untracked file(s)...", "debug")
             previous_hashes = self._get_file_hashes(list(untracked_files))
 
         for attempt in range(self.retries):
@@ -182,16 +303,14 @@ class FileStabilityChecker:
             current_sizes = self._get_file_sizes(all_files)
 
             if current_sizes is None:
-                logger.warning("Failed to get file sizes during batch check")
+                self._log("Failed to get file sizes during batch check", "warning")
                 return []
 
             # On first check, just record sizes
             if attempt == 0:
                 previous_sizes = current_sizes
                 total_bytes = sum(current_sizes.values())
-                logger.info(
-                    f"Initial check: {len(all_files)} file(s), {total_bytes:,} bytes total"
-                )
+                self._log(f"Verifying file stability: {len(all_files)} file(s), {total_bytes:,} bytes total", "debug")
             else:
                 # Compare with previous sizes
                 size_changed = False
@@ -202,10 +321,8 @@ class FileStabilityChecker:
                         if prev_size != curr_size:
                             if item not in unstable_items:
                                 unstable_items.append(item)
-                                logger.info(
-                                    f"'{item.name}' still transferring "
-                                    f"({file_path.name}: {prev_size:,}→{curr_size:,} bytes)"
-                                )
+                                reason = f"still transferring ({file_path.name}: {prev_size:,} -> {curr_size:,} bytes)"
+                                unstable_reasons[item] = reason
                                 size_changed = True
                             break
 
@@ -214,28 +331,22 @@ class FileStabilityChecker:
                     for item in item_files_map.keys():
                         if item not in unstable_items:
                             stable_items.append(item)
-
-                    logger.info(
-                        f"Stability check complete: {len(stable_items)} stable, "
-                        f"{len(unstable_items)} still transferring"
-                    )
                     return stable_items
                 else:
-                    logger.debug(f"Size check {attempt + 1}/{self.retries} passed")
+                    self._log(f"Size check {attempt + 1}/{self.retries} passed", "debug")
 
                 previous_sizes = current_sizes
 
             # Wait before next check (except on last iteration)
             if attempt < self.retries - 1:
-                logger.debug(f"Waiting {self.check_interval} seconds before next check...")
+                self._log(f"Waiting {self.check_interval} seconds before next check...", "debug")
                 time.sleep(self.check_interval)
 
         # Size checks passed - now do additional checks
 
         # 1. Hash verification for untracked files
-        hash_unstable_count = 0
         if self.hash_check_for_untracked and untracked_files:
-            logger.info(f"Verifying hashes for {len(untracked_files)} untracked file(s)...")
+            self._log(f"Verifying hashes for {len(untracked_files)} untracked file(s)...", "debug")
             current_hashes = self._get_file_hashes(list(untracked_files))
 
             for item in list(untracked_items):
@@ -247,18 +358,10 @@ class FileStabilityChecker:
                         if prev_hash and curr_hash and prev_hash != curr_hash:
                             if item not in unstable_items:
                                 unstable_items.append(item)
-                                hash_unstable_count += 1
-                                logger.info(
-                                    f"'{item.name}' hash changed for '{file_path.name}' - still being modified"
-                                )
+                                unstable_reasons[item] = f"hash changed for '{file_path.name}' - still being modified"
                             break
 
-            if hash_unstable_count == 0:
-                logger.info(f"Hash verification passed for all {len(untracked_files)} untracked file(s)")
-
         # 2. Check for 0-byte files (unless allowed)
-        zero_byte_items: List[Path] = []
-
         if not self.allow_zero_byte_files:
             for item, files in item_files_map.items():
                 if item in unstable_items:
@@ -266,30 +369,14 @@ class FileStabilityChecker:
 
                 for file_path in files:
                     if current_sizes.get(file_path, 0) == 0:
-                        logger.info(
-                            f"'{item.name}' has 0-byte file(s) - likely still downloading: {file_path.name}"
-                        )
-                        zero_byte_items.append(item)
+                        unstable_items.append(item)
+                        unstable_reasons[item] = f"has 0-byte file: {file_path.name}"
                         break
 
         # Build final stable list
         for item in item_files_map.keys():
-            if item not in unstable_items and item not in zero_byte_items:
+            if item not in unstable_items:
                 stable_items.append(item)
-
-        total_bytes = sum(current_sizes.values())
-
-        if unstable_items or zero_byte_items:
-            logger.info(
-                f"Transfer check complete: {len(stable_items)} stable, "
-                f"{len(unstable_items)} still transferring, "
-                f"{len(zero_byte_items)} with 0-byte file(s)"
-            )
-        else:
-            logger.info(
-                f"Transfer complete for all {len(stable_items)} item(s): "
-                f"{len(all_files)} file(s), {total_bytes:,} bytes total"
-            )
 
         return stable_items
 

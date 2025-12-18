@@ -103,3 +103,22 @@ def set_quiet_mode(quiet: bool = True) -> None:
                 handler.setLevel(logging.WARNING)  # Only show warnings and errors
             else:
                 handler.setLevel(logging.INFO)  # Show all info messages
+
+
+def set_debug_mode(debug: bool = True) -> None:
+    """
+    Enable or disable debug mode for all output.
+
+    In debug mode:
+    - Logger level set to DEBUG
+    - All handlers show DEBUG and above
+
+    Args:
+        debug: If True, enable debug logging; if False, revert to INFO
+    """
+    logger = logging.getLogger("media_organizer")
+    level = logging.DEBUG if debug else logging.INFO
+    logger.setLevel(level)
+
+    for handler in logger.handlers:
+        handler.setLevel(level)

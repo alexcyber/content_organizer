@@ -397,7 +397,22 @@ class SyncthingIntegration:
 
             headers = {'X-API-Key': self.api_key}
 
-            # 1. Check for files still being downloaded (in progress)
+            # 1. Check folder state - must be "idle" for sync to be complete
+            resp_status = requests.get(
+                f'{self.api_url}/rest/db/status?folder={folder_id}',
+                headers=headers,
+                timeout=self.api_timeout
+            )
+            resp_status.raise_for_status()
+            folder_status = resp_status.json()
+            folder_state = folder_status.get('state', '')
+
+            if folder_state in ('syncing', 'scanning', 'sync-preparing'):
+                logger.debug(f"Folder {folder_id} is in state '{folder_state}' - not idle")
+                # Don't return yet, still check if our specific path has pending files
+
+            # 2. Check for ALL pending files (progress + queued + rest)
+            # This is critical - the old code only checked 'progress' which missed queued files!
             resp_need = requests.get(
                 f'{self.api_url}/rest/db/need?folder={folder_id}',
                 headers=headers,
@@ -406,25 +421,54 @@ class SyncthingIntegration:
             resp_need.raise_for_status()
 
             data_need = resp_need.json()
-            progress_files = data_need.get('progress', [])
 
-            # Filter files in our path that are downloading
-            files_downloading = []
+            # Collect ALL pending files from all categories
+            all_pending_files = []
+            progress_files = data_need.get('progress', [])
+            queued_files = data_need.get('queued', [])
+            rest_files = data_need.get('rest', [])
+
+            all_pending_files.extend(progress_files)
+            all_pending_files.extend(queued_files)
+            all_pending_files.extend(rest_files)
+
+            logger.debug(
+                f"Folder {folder_id} pending files: "
+                f"{len(progress_files)} in progress, "
+                f"{len(queued_files)} queued, "
+                f"{len(rest_files)} other"
+            )
+
+            # Filter files in our path that are pending (from ANY category)
+            files_pending = []
             if path.is_dir():
                 path_prefix_with_slash = path_prefix + '/'
-                files_downloading = [
-                    f for f in progress_files
-                    if f.get('name', '').startswith(path_prefix_with_slash)
+                # Also check if the path itself matches (for the directory entry)
+                files_pending = [
+                    f for f in all_pending_files
+                    if (f.get('name', '').startswith(path_prefix_with_slash) or
+                        f.get('name', '') == path_prefix)
                 ]
             else:
-                files_downloading = [
-                    f for f in progress_files
+                files_pending = [
+                    f for f in all_pending_files
                     if f.get('name', '') == path_prefix
                 ]
 
-            bytes_downloading = sum(f.get('size', 0) for f in files_downloading)
+            bytes_pending = sum(f.get('size', 0) for f in files_pending)
 
-            # 2. For directories, check if all expected files have appeared locally
+            if files_pending:
+                # Log details about what's pending
+                for f in files_pending[:5]:  # Log first 5
+                    logger.debug(f"  Pending file: {f.get('name', 'unknown')}")
+                if len(files_pending) > 5:
+                    logger.debug(f"  ... and {len(files_pending) - 5} more")
+
+            # Rename for compatibility with rest of function
+            files_downloading = files_pending
+            bytes_downloading = bytes_pending
+
+            # 3. For directories, check if all expected files have appeared locally
             files_not_visible = 0
             bytes_not_visible = 0
             is_tracked = False  # Will be set to True if Syncthing knows about this path

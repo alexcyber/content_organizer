@@ -5,6 +5,7 @@ mock_test/verification_report.txt
 mock_test/test_media/*
 mock_test/mock_test_rubric*
 tree.sh
+**CLAUDE**
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
